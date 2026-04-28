@@ -8,7 +8,6 @@
   "hideThinkingBlock": true,
   "lastChangelogVersion": "0.70.6",
   "packages": [],
-  "quietStartup": true,
   "theme": "catppuccin-mocha",
   "terminal": {
     "showTerminalProgress": true

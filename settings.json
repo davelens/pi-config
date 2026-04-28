@@ -7,5 +7,6 @@
   "skills": [
     "~/.config/agents/skills"
   ],
-  "packages": []
+  "packages": [],
+  "theme": "catppuccin-mocha"
 }

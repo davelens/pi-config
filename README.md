@@ -37,5 +37,4 @@ Then run `pi install <source>` for each one.
 
 ## Skills
 
-- **Local skills** — copied directly into this repo
-- **Dotsys skills** (symlinks) — `dev-project-wiki`, `project-conventions`, `project-memory`, `searching-activecollab-history` point to my dotsys repo
+Blank for now until `obra/superpowers` finishes its PR for pi adoption.

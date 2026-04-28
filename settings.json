@@ -1,5 +1,5 @@
 {
-  "lastChangelogVersion": "0.70.5",
+  "lastChangelogVersion": "0.70.6",
   "defaultProvider": "llamacpp",
   "defaultModel": "qwen3.6",
   "defaultThinkingLevel": "off",

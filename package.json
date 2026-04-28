@@ -1,6 +1,6 @@
 {
   "name": "davelens-pi-config",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "Pi coding agent configuration — clone to ~/.config/pi/ or ~/.pi/agent/",
   "keywords": ["pi-package"],
   "author": "Dave Lens",

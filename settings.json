@@ -1,12 +1,20 @@
 {
-  "lastChangelogVersion": "0.70.6",
-  "defaultProvider": "llamacpp",
+  "autocompleteMaxVisible": 5,
+  "collapseChangelog": true,
   "defaultModel": "qwen3.6",
-  "defaultThinkingLevel": "off",
+  "defaultProvider": "llamacpp",
+  "defaultThinkingLevel": "medium",
+  "editorPaddingX": 1,
   "hideThinkingBlock": true,
+  "lastChangelogVersion": "0.70.6",
+  "packages": [],
+  "quietStartup": true,
+  "theme": "catppuccin-mocha",
+  "terminal": {
+    "showTerminalProgress": true
+  },
+  "treeFilterMode": "default",
   "skills": [
     "~/.config/agents/skills"
   ],
-  "packages": [],
-  "theme": "catppuccin-mocha"
 }

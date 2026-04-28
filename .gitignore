@@ -1,0 +1,11 @@
+# Auth data — never commit
+auth.json
+
+# Session history
+sessions/
+
+# Local model cache
+cache/
+
+# Node modules from extensions
+node_modules/

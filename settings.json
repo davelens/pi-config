@@ -1,0 +1,11 @@
+{
+  "lastChangelogVersion": "0.70.5",
+  "defaultProvider": "llamacpp",
+  "defaultModel": "qwen3.6",
+  "defaultThinkingLevel": "off",
+  "hideThinkingBlock": true,
+  "skills": [
+    "~/.config/agents/skills"
+  ],
+  "packages": []
+}

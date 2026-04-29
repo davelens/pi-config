@@ -7,7 +7,9 @@
   "editorPaddingX": 1,
   "hideThinkingBlock": true,
   "lastChangelogVersion": "0.70.6",
-  "packages": [],
+  "packages": [
+    "npm:@plannotator/pi-extension"
+  ],
   "theme": "catppuccin-mocha",
   "terminal": {
     "showTerminalProgress": true

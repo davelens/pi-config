@@ -1,7 +1,7 @@
 {
   "autocompleteMaxVisible": 5,
   "collapseChangelog": true,
-  "defaultModel": "qwen3.6",
+  "defaultModel": "local",
   "defaultProvider": "llamacpp",
   "defaultThinkingLevel": "medium",
   "editorPaddingX": 1,
@@ -17,3 +17,4 @@
     "~/.config/agents/skills"
   ]
 }
+

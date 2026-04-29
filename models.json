@@ -5,22 +5,15 @@
       "api": "openai-completions",
       "apiKey": "llama",
       "compat": {
-        "supportsDeveloperRole": false,
-        "supportsReasoningEffort": false,
-        "supportsStore": false,
-        "maxTokensField": "max_tokens"
+        "supportsDeveloperRole": true,
+        "supportsReasoningEffort": false
       },
       "models": [
         {
-          "id": "qwen3.6",
-          "name": "Qwen 3.6 (llama.cpp)",
-          "input": ["text"],
-          "cost": {
-            "input": 0,
-            "output": 0,
-            "cacheRead": 0,
-            "cacheWrite": 0
-          }
+          "id": "local",
+          "reasoning": true,
+          "name": "llama.cpp",
+          "input": ["text", "image"]
         }
       ]
     }

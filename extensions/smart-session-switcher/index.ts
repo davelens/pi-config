@@ -408,7 +408,6 @@ class SwitchSessionComponent implements Component {
       }
       this.sessions = this.sessions.filter((session) => session.path !== selected.path);
       this.applyFilter(false);
-      this.status = "Session deleted";
     } catch (error) {
       this.status = `Delete failed: ${error instanceof Error ? error.message : String(error)}`;
     } finally {

@@ -1,8 +1,8 @@
 {
   "autocompleteMaxVisible": 5,
   "collapseChangelog": true,
-  "defaultModel": "local",
-  "defaultProvider": "llamacpp",
+  "defaultModel": "gpt-5.5",
+  "defaultProvider": "openai-codex",
   "defaultThinkingLevel": "medium",
   "editorPaddingX": 1,
   "hideThinkingBlock": true,

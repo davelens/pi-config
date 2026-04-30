@@ -34,20 +34,19 @@ EDITOR="${EDITOR:-nvim}" pi
 
 While typing in Pi, press `Ctrl+e` to open the current input prompt in your editor. Save and quit to replace the Pi input box with the edited text. Run `/reload` in Pi or restart Pi after changing keybindings.
 
-## Switching sessions with summaries
+## Switching sessions
 
 Use `/switch-session` to switch between sessions for the current project.
 
 The smart switcher:
 
-- shows a generated session summary, capped at 10 words
-- stores generated/renamed summaries as Pi `session_info` names in each session JSONL
-- uses the cheapest accessible configured GPT text model for missing summaries
-- asks you to run `/login` or configure a GPT provider API key if no GPT model is accessible
-- includes fuzzy search against session summaries/first messages; `Ctrl+c` clears search first, then cancels if search is empty
+- shows manually renamed session names when available, capped at 10 words
+- falls back to the first message when a session has not been renamed
+- stores renamed sessions as Pi `session_info` names in each session JSONL
+- includes fuzzy search against session names/first messages; `Ctrl+c` clears search first, then cancels if search is empty
 - supports `Ctrl+n`/`Ctrl+p` to move down/up
 - shows up to 8 session items at once
-- supports `Ctrl+r` to rename the highlighted summary
+- supports `Ctrl+r` to rename the highlighted session
 - supports `Ctrl+d` to open a delete confirmation dialog for the highlighted session history
 
 `/resume` remains Pi's built-in session picker; extensions cannot override that literal command from this config repo.

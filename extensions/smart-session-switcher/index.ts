@@ -1,4 +1,3 @@
-import { complete } from "@mariozechner/pi-ai";
 import {
   SessionManager,
   type ExtensionAPI,
@@ -8,8 +7,7 @@ import {
 import { Container, Input, matchesKey, Text, truncateToWidth, visibleWidth, type Component, type TUI } from "@mariozechner/pi-tui";
 import { existsSync, unlinkSync } from "node:fs";
 
-const MAX_SUMMARY_WORDS = 10;
-const MAX_CONVERSATION_CHARS = 12000;
+const MAX_SESSION_NAME_WORDS = 10;
 
 // Catppuccin Mocha-specific rule colors requested for this config.
 // Keep these centralized because they intentionally bypass Pi's generic theme names.
@@ -17,16 +15,11 @@ const CATPPUCCIN_MOCHA_BASE_BG = "\x1b[48;2;30;30;46m";
 const CATPPUCCIN_MOCHA_SURFACE0_FG = "\x1b[38;2;49;50;68m";
 const ANSI_RESET = "\x1b[0m";
 
-type SummaryModel = {
-  model: ReturnType<ExtensionCommandContext["modelRegistry"]["getAll"]>[number];
-  auth: { apiKey?: string; headers?: Record<string, string> };
-};
-
 type SwitchResult =
   | { action: "switch"; path: string }
   | { action: "cancel" };
 
-function wordLimit(text: string, maxWords = MAX_SUMMARY_WORDS): string {
+function wordLimit(text: string, maxWords = MAX_SESSION_NAME_WORDS): string {
   const cleaned = text
     .replace(/["'`]/g, "")
     .replace(/[\r\n\t]+/g, " ")
@@ -51,120 +44,19 @@ function formatAge(date: Date): string {
   return `${Math.floor(days / 365)}y`;
 }
 
-function costScore(model: SummaryModel["model"]): number {
-  const cost = model.cost ?? { input: Number.MAX_SAFE_INTEGER, output: Number.MAX_SAFE_INTEGER };
-  return (cost.output ?? 0) * 10 + (cost.input ?? 0);
-}
-
-async function pickCheapestAccessibleGptModel(ctx: ExtensionCommandContext): Promise<SummaryModel | undefined> {
-  const candidates = ctx.modelRegistry
-    .getAll()
-    .filter((model) => `${model.provider} ${model.id} ${model.name ?? ""}`.toLowerCase().includes("gpt"))
-    .filter((model) => model.input?.includes("text"))
-    .sort((a, b) => costScore(a) - costScore(b));
-
-  for (const model of candidates) {
-    const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-    if (auth.ok && (auth.apiKey || auth.headers)) {
-      return { model, auth: { apiKey: auth.apiKey, headers: auth.headers } };
-    }
-  }
-
-  return undefined;
-}
-
-function buildSummaryPrompt(session: SessionInfo): string {
-  const conversation = (session.allMessagesText || session.firstMessage || "")
-    .replace(/\s+/g, " ")
-    .slice(-MAX_CONVERSATION_CHARS);
-
-  return [
-    "Create a concise title for this Pi coding-agent session.",
-    `Maximum ${MAX_SUMMARY_WORDS} words.`,
-    "Return only the title. No quotes. No punctuation-only filler.",
-    "Base it on the actual session contents.",
-    "",
-    "Session contents:",
-    conversation || "(no messages)",
-  ].join("\n");
-}
-
-async function generateSummary(session: SessionInfo, summaryModel: SummaryModel): Promise<string> {
-  const response = await complete(
-    summaryModel.model,
-    {
-      messages: [
-        {
-          role: "user" as const,
-          content: [{ type: "text" as const, text: buildSummaryPrompt(session) }],
-          timestamp: Date.now(),
-        },
-      ],
-    },
-    {
-      apiKey: summaryModel.auth.apiKey,
-      headers: summaryModel.auth.headers,
-      maxTokens: 48,
-      reasoningEffort: "minimal",
-    },
-  );
-
-  const text = response.content
-    .filter((part): part is { type: "text"; text: string } => part.type === "text")
-    .map((part) => part.text)
-    .join(" ");
-
-  return wordLimit(text || session.firstMessage);
-}
-
 function persistSessionName(
   sessionPath: string,
   nextName: string,
   currentSessionPath: string | undefined,
   setCurrentSessionName: (name: string) => void,
 ): string {
-  const summary = wordLimit(nextName);
+  const sessionName = wordLimit(nextName);
   if (currentSessionPath && sessionPath === currentSessionPath) {
-    setCurrentSessionName(summary);
+    setCurrentSessionName(sessionName);
   } else {
-    SessionManager.open(sessionPath).appendSessionInfo(summary);
+    SessionManager.open(sessionPath).appendSessionInfo(sessionName);
   }
-  return summary;
-}
-
-async function ensureSessionSummaries(
-  sessions: SessionInfo[],
-  ctx: ExtensionCommandContext,
-  setCurrentSessionName: (name: string) => void,
-): Promise<SessionInfo[]> {
-  const missing = sessions.filter((session) => !session.name?.trim());
-  if (missing.length === 0) return sessions;
-
-  const summaryModel = await pickCheapestAccessibleGptModel(ctx);
-  if (!summaryModel) {
-    ctx.ui.notify(
-      "No accessible GPT summary model found. Run /login or configure a GPT provider API key, then retry /switch-session.",
-      "warning",
-    );
-    return sessions;
-  }
-
-  ctx.ui.notify(`Generating ${missing.length} session summaries with ${summaryModel.model.provider}/${summaryModel.model.id}...`, "info");
-
-  for (let i = 0; i < missing.length; i++) {
-    const session = missing[i]!;
-    try {
-      const summary = await generateSummary(session, summaryModel);
-      session.name = persistSessionName(session.path, summary, ctx.sessionManager.getSessionFile(), setCurrentSessionName);
-      ctx.ui.setStatus("switch-session", `Summarized ${i + 1}/${missing.length}`);
-    } catch (error) {
-      session.name = wordLimit(session.firstMessage);
-      ctx.ui.notify(`Failed to summarize one session: ${error instanceof Error ? error.message : String(error)}`, "warning");
-    }
-  }
-
-  ctx.ui.setStatus("switch-session", undefined);
-  return sessions;
+  return sessionName;
 }
 
 class BlankLine implements Component {
@@ -290,7 +182,7 @@ class SwitchSessionComponent implements Component {
 
     if (this.mode === "rename") {
       container.addChild(new BlankLine());
-      container.addChild(new Text(this.theme.fg("accent", "Rename summary"), 2, 0));
+      container.addChild(new Text(this.theme.fg("accent", "Rename session"), 2, 0));
       container.addChild(this.renameInput);
       container.addChild(new Text(this.theme.fg("dim", "Enter saves · Esc cancels"), 2, 0));
       return this.box(container.render(contentWidth), width, "accent");
@@ -322,12 +214,12 @@ class SwitchSessionComponent implements Component {
 
   private renderDeleteDialog(width: number): string[] {
     const selected = this.selectedSession();
-    const summary = wordLimit(selected?.name || selected?.firstMessage || "this session");
+    const sessionName = wordLimit(selected?.name || selected?.firstMessage || "this session");
     const contentWidth = Math.max(1, width - 2);
     const container = new Container();
     container.addChild(new Text(this.theme.fg("error", this.theme.bold("Delete session?")), 2, 0));
     container.addChild(new Text(this.errorRule(Math.max(1, width - 7)), 2, 0));
-    container.addChild(new Text(truncateToWidth(`Are you sure you wish to delete “${summary}”?`, Math.max(1, width - 4), "…"), 2, 0));
+    container.addChild(new Text(truncateToWidth(`Are you sure you wish to delete “${sessionName}”?`, Math.max(1, width - 4), "…"), 2, 0));
     container.addChild(new BlankLine());
     container.addChild(new Text(this.deleteButtons(Math.max(1, width - 4)), 2, 0));
     return this.box(container.render(contentWidth), width, "error");
@@ -426,7 +318,7 @@ class SwitchSessionComponent implements Component {
   }
 
   private columnHeader(width: number): string {
-    const left = this.theme.fg("dim", "  Summary");
+    const left = this.theme.fg("dim", "  Session");
     const right = this.theme.fg("dim", "Msgs  Age");
     const spacing = Math.max(1, width - visibleWidth(left) - visibleWidth(right));
     return left + " ".repeat(spacing) + right;
@@ -443,12 +335,12 @@ class SwitchSessionComponent implements Component {
     const selected = index === this.selectedIndex;
     const current = this.currentSessionPath === session.path;
     const cursor = selected ? this.theme.fg("accent", "> ") : "  ";
-    const summary = wordLimit(session.name || session.firstMessage);
+    const sessionName = wordLimit(session.name || session.firstMessage);
     const msgCount = String(session.messageCount).padStart(4, " ");
     const age = formatAge(session.modified).padStart(4, " ");
     const right = `${msgCount} ${age}${current ? "  current" : ""}`;
     const available = Math.max(10, width - visibleWidth(cursor) - visibleWidth(right) - 2);
-    let left = cursor + truncateToWidth(summary, available, "…");
+    let left = cursor + truncateToWidth(sessionName, available, "…");
     if (current) left = this.theme.fg("accent", left);
     if (selected) left = this.theme.bold(left);
     const spacing = Math.max(1, width - visibleWidth(left) - visibleWidth(right));
@@ -481,11 +373,11 @@ class SwitchSessionComponent implements Component {
   private finishRename(value: string): void {
     const selected = this.selectedSession();
     if (!selected) return;
-    const summary = wordLimit(value);
-    selected.name = this.persistName(selected.path, summary);
+    const sessionName = wordLimit(value);
+    selected.name = this.persistName(selected.path, sessionName);
     this.applyFilter(false);
     this.mode = "list";
-    this.status = "Renamed session summary";
+    this.status = "Renamed session";
   }
 
   private startDeleteConfirmation(): void {
@@ -561,14 +453,13 @@ async function showSwitchSessionUi(sessions: SessionInfo[], ctx: ExtensionComman
 
 export default function (pi: ExtensionAPI) {
   pi.registerCommand("switch-session", {
-    description: "Switch project sessions with generated summaries",
+    description: "Switch project sessions with manual renaming",
     handler: async (_args, ctx) => {
       if (!ctx.hasUI) return;
 
       await ctx.waitForIdle();
 
-      let sessions = await SessionManager.list(ctx.cwd, ctx.sessionManager.getSessionDir());
-      sessions = await ensureSessionSummaries(sessions, ctx, (name) => pi.setSessionName(name));
+      const sessions = await SessionManager.list(ctx.cwd, ctx.sessionManager.getSessionDir());
       sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
 
       const result = await showSwitchSessionUi(sessions, ctx, pi);

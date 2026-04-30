@@ -1,0 +1,7 @@
+{
+  "name": "smart-session-switcher",
+  "version": "0.1.0",
+  "description": "Project-scoped Pi session switcher with generated summaries",
+  "type": "module",
+  "dependencies": {}
+}

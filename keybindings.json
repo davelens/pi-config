@@ -1,3 +1,8 @@
 {
-  "app.editor.external": "ctrl+e"
+  "app.editor.external": "ctrl+e",
+  "app.model.cycleBackward": "ctrl+h",
+  "app.model.cycleForward": "ctrl+l",
+  "app.model.select": "ctrl+s",
+  "tui.select.down": ["down", "ctrl+n"],
+  "tui.select.up": ["up", "ctrl+p"]
 }

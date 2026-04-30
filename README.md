@@ -24,7 +24,7 @@ Or just clone and run `pi` — it auto-discovers skills, extensions, prompts, an
 
 ## Editing the current input prompt in Neovim
 
-`keybindings.json` maps Pi's built-in external editor action to `Ctrl+e`.
+`keybindings.json` maps Pi's built-in external editor action to `Ctrl+e`. It also maps the model selector to `Ctrl+s`, disables the default `Ctrl+p` quick-cycle model binding, and adds `Ctrl+n`/`Ctrl+p` navigation to Pi selectors like `/tree` and `/resume`.
 
 Pi uses `$VISUAL` first, then `$EDITOR`. If your launch environment might not set an editor, default it safely with:
 
@@ -44,9 +44,11 @@ The smart switcher:
 - stores generated/renamed summaries as Pi `session_info` names in each session JSONL
 - uses the cheapest accessible configured GPT text model for missing summaries
 - asks you to run `/login` or configure a GPT provider API key if no GPT model is accessible
-- supports `j`/`k` to move down/up
+- includes fuzzy search against session summaries/first messages; `Ctrl+c` clears search first, then cancels if search is empty
+- supports `Ctrl+n`/`Ctrl+p` to move down/up
+- shows up to 8 session items at once
 - supports `Ctrl+r` to rename the highlighted summary
-- supports `Ctrl+d` to confirm and delete the highlighted session history
+- supports `Ctrl+d` to open a delete confirmation dialog for the highlighted session history
 
 `/resume` remains Pi's built-in session picker; extensions cannot override that literal command from this config repo.
 

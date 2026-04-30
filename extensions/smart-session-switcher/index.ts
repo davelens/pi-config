@@ -181,7 +181,7 @@ class SwitchSessionComponent implements Component {
     if (this.mode === "rename") {
       container.addChild(new BlankLine());
       container.addChild(new Text(this.theme.fg("accent", "Rename session"), 2, 0));
-      container.addChild(this.renameInput);
+      container.addChild(new IndentedInput(this.renameInput, 2));
       container.addChild(new Text(this.footerRule(innerWidth), 2, 0));
       container.addChild(new Text(this.theme.fg("dim", "Enter saves · Esc cancels"), 2, 0));
       return this.box(container.render(contentWidth), width, "accent");

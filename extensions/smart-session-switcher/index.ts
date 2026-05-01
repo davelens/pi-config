@@ -84,6 +84,13 @@ class IndentedInput implements Component {
   }
 }
 
+function stripTerminalColorReports(data: string): string {
+  // Some terminals reply to OSC 10/11/12 color queries on stdin. If that
+  // response arrives while this custom UI owns input, the printable tail can
+  // otherwise end up in the filter/rename input.
+  return data.replace(/(?:\x1b)?\](?:10|11|12);rgb:[0-9a-fA-F]{1,4}\/[0-9a-fA-F]{1,4}\/[0-9a-fA-F]{1,4}(?:\x07|\x1b\\)?/g, "");
+}
+
 function fuzzyScore(text: string, query: string): number {
   if (!query.trim()) return 1;
   const haystack = text.toLowerCase();
@@ -228,6 +235,9 @@ class SwitchSessionComponent implements Component {
   }
 
   handleInput(data: string): void {
+    data = stripTerminalColorReports(data);
+    if (!data) return;
+
     if (this.mode === "rename") {
       if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
         this.mode = "list";

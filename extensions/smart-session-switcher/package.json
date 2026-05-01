@@ -1,6 +1,7 @@
 {
   "name": "smart-session-switcher",
   "version": "0.1.0",
+  "author": "Dave lens",
   "description": "Project-scoped Pi session switcher with manual renaming",
   "type": "module",
   "dependencies": {}

@@ -8,7 +8,8 @@
   "hideThinkingBlock": false,
   "lastChangelogVersion": "0.74.0",
   "packages": [
-    "npm:@plannotator/pi-extension"
+    "npm:@plannotator/pi-extension",
+    "npm:pi-claude-bridge"
   ],
   "theme": "catppuccin-mocha",
   "terminal": {

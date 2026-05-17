@@ -350,13 +350,14 @@ class SwitchSessionComponent implements Component {
     const sessionName = wordLimit(session.name || session.firstMessage);
     const msgCount = String(session.messageCount).padStart(4, " ");
     const age = formatAge(session.modified).padStart(4, " ");
-    const right = `${msgCount} ${age}${current ? "  current" : ""}`;
-    const available = Math.max(10, width - visibleWidth(cursor) - visibleWidth(right) - 2);
+    const right = `${msgCount} ${age}`;
+    const tag = current ? "current  " : "";
+    const available = Math.max(10, width - visibleWidth(cursor) - visibleWidth(right) - visibleWidth(tag) - 2);
     let left = cursor + truncateToWidth(sessionName, available, "…");
     if (current) left = this.theme.fg("accent", left);
     if (selected) left = this.theme.bold(left);
-    const spacing = Math.max(1, width - visibleWidth(left) - visibleWidth(right));
-    let line = left + " ".repeat(spacing) + this.theme.fg("dim", right);
+    const spacing = Math.max(1, width - visibleWidth(left) - visibleWidth(right) - visibleWidth(tag));
+    let line = left + " ".repeat(spacing) + this.theme.fg("dim", tag + right);
     if (selected) line = this.theme.bg("selectedBg", line);
     return truncateToWidth(line, width, "");
   }

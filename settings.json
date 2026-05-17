@@ -6,7 +6,7 @@
   "defaultThinkingLevel": "medium",
   "editorPaddingX": 1,
   "hideThinkingBlock": false,
-  "lastChangelogVersion": "0.74.0",
+  "lastChangelogVersion": "0.74.1",
   "packages": [
     "npm:@plannotator/pi-extension",
     "npm:pi-claude-bridge"

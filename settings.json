@@ -1,14 +1,13 @@
 {
   "autocompleteMaxVisible": 5,
   "collapseChangelog": true,
-  "defaultModel": "local",
-  "defaultProvider": "llamacpp",
+  "defaultModel": "claude-opus-4-7",
+  "defaultProvider": "claude-bridge",
   "defaultThinkingLevel": "medium",
   "editorPaddingX": 1,
   "hideThinkingBlock": false,
-  "lastChangelogVersion": "0.75.3",
+  "lastChangelogVersion": "0.75.5",
   "packages": [
-    "npm:@plannotator/pi-extension",
     "npm:pi-claude-bridge"
   ],
   "theme": "catppuccin-mocha",

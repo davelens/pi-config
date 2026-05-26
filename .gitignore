@@ -2,4 +2,5 @@ auth.json
 bin/
 cache/
 node_modules/
+npm/
 sessions/

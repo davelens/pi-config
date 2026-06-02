@@ -5,7 +5,7 @@
   "defaultProvider": "claude-bridge",
   "defaultThinkingLevel": "medium",
   "editorPaddingX": 1,
-  "hideThinkingBlock": false,
+  "hideThinkingBlock": true,
   "lastChangelogVersion": "0.78.0",
   "packages": [
     "npm:pi-claude-bridge",

@@ -8,7 +8,8 @@
   "hideThinkingBlock": false,
   "lastChangelogVersion": "0.78.0",
   "packages": [
-    "npm:pi-claude-bridge"
+    "npm:pi-claude-bridge",
+    "npm:pi-mcp-adapter"
   ],
   "theme": "catppuccin-mocha",
   "terminal": {

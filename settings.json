@@ -1,8 +1,8 @@
 {
   "autocompleteMaxVisible": 5,
   "collapseChangelog": true,
-  "defaultModel": "claude-opus-4-7",
-  "defaultProvider": "claude-bridge",
+  "defaultModel": "local",
+  "defaultProvider": "llamacpp",
   "defaultThinkingLevel": "medium",
   "editorPaddingX": 1,
   "hideThinkingBlock": true,

@@ -57,7 +57,7 @@ Edit `settings.json` and add to the `packages` array:
 
 ```json
 "packages": [
-  "npm:@plannotator/pi-extension",
+  "npm:pi-mcp-adapter",
   "git:github.com/other/pi-tools"
 ]
 ```

@@ -1,6 +1,9 @@
 auth.json
 bin/
 cache/
+mcp-oauth/
 node_modules/
 npm/
 sessions/
+mcp-cache.json
+mcp-onboarding.json

@@ -19,5 +19,44 @@
   "treeFilterMode": "default",
   "skills": [
     "~/.config/agents/skills/pi"
-  ]
+  ],
+  "subagents": {
+    "agentOverrides": {
+      "scout": {
+        "model": "openai-codex/gpt-5.5",
+        "thinking": "medium"
+      },
+      "planner": {
+        "model": "openai-codex/gpt-5.5",
+        "thinking": "high"
+      },
+      "context-builder": {
+        "model": "openai-codex/gpt-5.5",
+        "thinking": "medium"
+      },
+      "researcher": {
+        "model": "openai-codex/gpt-5.5",
+        "thinking": "medium"
+      },
+      "worker": {
+        "model": "anthropic/claude-opus-4-7",
+        "thinking": "high",
+        "fallbackModels": [
+          "openai-codex/gpt-5.5"
+        ]
+      },
+      "reviewer": {
+        "model": "anthropic/claude-opus-4-7",
+        "thinking": "high"
+      },
+      "oracle": {
+        "model": "anthropic/claude-opus-4-7",
+        "thinking": "high"
+      },
+      "delegate": {
+        "model": "openai-codex/gpt-5.5",
+        "thinking": "medium"
+      }
+    }
+  }
 }

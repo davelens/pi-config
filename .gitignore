@@ -7,3 +7,4 @@ npm/
 sessions/
 mcp-cache.json
 mcp-onboarding.json
+run-history.jsonl

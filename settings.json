@@ -1,8 +1,8 @@
 {
   "autocompleteMaxVisible": 5,
   "collapseChangelog": true,
-  "defaultModel": "local",
-  "defaultProvider": "llamacpp",
+  "defaultModel": "gpt-5.5",
+  "defaultProvider": "openai-codex",
   "defaultThinkingLevel": "medium",
   "editorPaddingX": 1,
   "hideThinkingBlock": true,
@@ -40,18 +40,18 @@
         "thinking": "medium"
       },
       "worker": {
-        "model": "anthropic/claude-opus-4-7",
+        "model": "claude-bridge/claude-opus-4-7",
         "thinking": "high",
         "fallbackModels": [
           "openai-codex/gpt-5.5"
         ]
       },
       "reviewer": {
-        "model": "anthropic/claude-opus-4-7",
+        "model": "claude-bridge/claude-opus-4-7",
         "thinking": "high"
       },
       "oracle": {
-        "model": "anthropic/claude-opus-4-7",
+        "model": "claude-bridge/claude-opus-4-7",
         "thinking": "high"
       },
       "delegate": {

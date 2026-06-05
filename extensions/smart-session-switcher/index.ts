@@ -471,7 +471,8 @@ export default function (pi: ExtensionAPI) {
 
       await ctx.waitForIdle();
 
-      const sessions = await SessionManager.list(ctx.cwd, ctx.sessionManager.getSessionDir());
+      const sessions = (await SessionManager.list(ctx.cwd, ctx.sessionManager.getSessionDir()))
+        .filter((session) => !session.parentSessionPath);
       sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
 
       const result = await showSwitchSessionUi(sessions, ctx, pi);

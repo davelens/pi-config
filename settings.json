@@ -6,7 +6,7 @@
   "defaultThinkingLevel": "medium",
   "editorPaddingX": 1,
   "hideThinkingBlock": true,
-  "lastChangelogVersion": "0.78.1",
+  "lastChangelogVersion": "0.79.1",
   "packages": [
     "npm:pi-claude-bridge",
     "npm:pi-intercom",

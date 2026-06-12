@@ -1,6 +1,6 @@
 # pi-config
 
-My Pi coding agent configuration. Clone to `~/.config/pi/` (or `~/.pi/agent/`) and run `setup.sh`.
+My Pi coding agent configuration. Clone to `~/.config/pi/` and run `setup.sh`.
 
 ## Structure
 

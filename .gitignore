@@ -1,6 +1,7 @@
 auth.json
 bin/
 cache/
+git/
 mcp-oauth/
 node_modules/
 npm/

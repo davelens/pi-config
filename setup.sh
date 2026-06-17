@@ -7,8 +7,25 @@ EXPECTED_DIR="$XDG_CONFIG_HOME/pi"
 
 [ -n "${PI_CODING_AGENT_DIR:-}" ] && EXPECTED_DIR="$PI_CODING_AGENT_DIR"
 
-if [ -d "$PI_CODING_AGENT_DIR" ] || [ -L "$PI_CODING_AGENT_DIR" ]; then
-  if [ -f "$PI_CODING_AGENT_DIR/settings.json" ]; then
+link_xdg_compat_paths() {
+  # Pi itself respects PI_CODING_AGENT_DIR. Some third-party packages still
+  # hardcode ~/.pi/agent, so keep that legacy path as a symlink into XDG config.
+  local compat_root
+  compat_root="$(dirname "$EXPECTED_DIR")/pi-compat"
+
+  mkdir -p "$compat_root"
+  ln -sfnT "$EXPECTED_DIR" "$compat_root/agent"
+
+  if [ -e "$HOME/.pi" ] && [ ! -L "$HOME/.pi" ]; then
+    echo "⚠ $HOME/.pi exists as a real directory; move it aside and rerun setup to enable XDG compatibility symlink."
+  else
+    ln -sfnT "$compat_root" "$HOME/.pi"
+  fi
+}
+
+if [ -d "$EXPECTED_DIR" ] || [ -L "$EXPECTED_DIR" ]; then
+  if [ -f "$EXPECTED_DIR/settings.json" ]; then
+    link_xdg_compat_paths
     echo "✓ pi is already configured."
   else
     echo "⚠ $EXPECTED_DIR exists, but does not have a settings.json!"
@@ -21,6 +38,8 @@ echo "Setting up pi-config at ${EXPECTED_DIR/$HOME/\~}"
 echo ""
 
 ln -s "$SCRIPT_DIR" "$EXPECTED_DIR"
+
+link_xdg_compat_paths
 
 if [ -f "$EXPECTED_DIR/settings.json" ]; then
   echo "Installing packages from settings.json:"

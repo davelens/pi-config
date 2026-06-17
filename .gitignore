@@ -2,6 +2,7 @@ auth.json
 bin/
 cache/
 git/
+intercom/
 mcp-oauth/
 node_modules/
 npm/

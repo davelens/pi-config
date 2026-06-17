@@ -22,6 +22,8 @@ cd ~/.config/pi && chmod +x setup.sh && ./setup.sh
 
 Or just clone and run `pi` — it auto-discovers skills, extensions, prompts, and themes.
 
+This config keeps Pi's global agent directory XDG-style at `~/.config/pi`. Pi core can use that directly via `PI_CODING_AGENT_DIR=~/.config/pi`; `setup.sh` also creates a compatibility symlink so older packages that hardcode `~/.pi/agent` resolve back into `~/.config/pi` instead of creating a real `~/.pi` directory.
+
 ## Editing the current input prompt in Neovim
 
 `keybindings.json` maps Pi's built-in external editor action to `Ctrl+e`. It also maps the model selector to `Ctrl+s`, disables the default `Ctrl+p` quick-cycle model binding, and adds `Ctrl+n`/`Ctrl+p` navigation to Pi selectors like `/tree` and `/resume`.

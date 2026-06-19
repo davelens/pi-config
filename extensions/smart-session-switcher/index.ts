@@ -3,7 +3,7 @@ import {
   type ExtensionAPI,
   type ExtensionCommandContext,
   type SessionInfo,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import { Container, Input, matchesKey, Text, truncateToWidth, visibleWidth, type Component, type TUI } from "@mariozechner/pi-tui";
 import { existsSync, unlinkSync } from "node:fs";
 

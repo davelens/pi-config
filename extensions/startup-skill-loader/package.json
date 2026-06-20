@@ -1,0 +1,8 @@
+{
+  "name": "startup-skill-loader",
+  "version": "0.1.0",
+  "author": "Dave lens",
+  "description": "Loads AGENTS.md startup skills into the system prompt before agent start",
+  "type": "module",
+  "dependencies": {}
+}

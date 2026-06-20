@@ -14,9 +14,10 @@ function applyFooter(ctx: ExtensionContext): void {
         const window = usage?.contextWindow ?? ctx.model?.contextWindow ?? 0;
 
         const percent = usage?.percent ?? null;
+        const model = ctx.model?.name ?? ctx.model?.id ?? "no-model";
         const statsLine = theme.fg(
           "accent",
-          `${tokens === null ? "?" : fmt(tokens)} / ${fmt(window)} (${percent === null ? "?" : percent.toFixed(0)}%)`,
+          `${model} (${fmt(window)}) \u2022 ${tokens === null ? "?" : fmt(tokens)} (${percent === null ? "?" : percent.toFixed(0)}%)`,
         );
 
         return [statsLine];

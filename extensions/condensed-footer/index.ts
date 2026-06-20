@@ -16,7 +16,7 @@ function applyFooter(ctx: ExtensionContext): void {
         const percent = usage?.percent ?? null;
         const model = ctx.model?.name ?? ctx.model?.id ?? "no-model";
         const statsLine = theme.fg(
-          "accent",
+          "dim",
           `${model} (${fmt(window)}) \u2022 ${tokens === null ? "?" : fmt(tokens)} (${percent === null ? "?" : percent.toFixed(0)}%)`,
         );
 

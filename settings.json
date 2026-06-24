@@ -12,6 +12,7 @@
     "npm:pi-intercom",
     "npm:pi-mcp-adapter",
     "npm:pi-subagents",
+    "npm:@quintinshaw/pi-dynamic-workflows"
   ],
   "theme": "catppuccin-mocha",
   "terminal": {

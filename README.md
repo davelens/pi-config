@@ -7,9 +7,7 @@ My Pi coding agent configuration. Clone to `~/.config/pi/` and run `setup.sh`.
 ```
 ├── settings.json    # Global settings (provider, model, packages)
 ├── models.json      # Custom provider/model definitions
-├── skills/          # Skills — local copies + symlinks to dotsys
 ├── extensions/      # Pi extensions (TypeScript)
-├── prompts/         # Prompt templates
 └── themes/          # Custom themes
 ```
 
@@ -68,4 +66,4 @@ Then run `pi install <source>` for each one.
 
 ## Skills
 
-Blank for now until `obra/superpowers` finishes its PR for pi adoption.
+Skills load from the external directory `~/.config/agents/skills/pi`, wired via the `skills` array in `settings.json`. There is no local `skills/` directory in this repo — Pi auto-discovers everything under that path.

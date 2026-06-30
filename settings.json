@@ -8,7 +8,7 @@
   "hideThinkingBlock": true,
   "lastChangelogVersion": "0.80.2",
   "packages": [
-    "git:github.com/locus84/pi-claude-bridge",
+    "git:github.com/elidickinson/pi-claude-bridge",
     "npm:pi-intercom",
     "npm:pi-mcp-adapter",
     "npm:pi-subagents",

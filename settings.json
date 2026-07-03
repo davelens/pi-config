@@ -6,7 +6,7 @@
   "defaultThinkingLevel": "high",
   "editorPaddingX": 1,
   "hideThinkingBlock": true,
-  "lastChangelogVersion": "0.80.2",
+  "lastChangelogVersion": "0.80.3",
   "packages": [
     "git:github.com/elidickinson/pi-claude-bridge",
     "npm:pi-intercom",

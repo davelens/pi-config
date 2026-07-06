@@ -26,39 +26,54 @@
   "subagents": {
     "agentOverrides": {
       "scout": {
-        "model": "openai-codex/gpt-5.5",
-        "thinking": "medium"
+        "model": "claude-bridge/claude-sonnet-5",
+        "thinking": "low"
       },
       "planner": {
         "model": "openai-codex/gpt-5.5",
         "thinking": "high"
       },
       "context-builder": {
-        "model": "openai-codex/gpt-5.5",
-        "thinking": "medium"
+        "model": "claude-bridge/claude-fable-5",
+        "thinking": "low",
+        "fallbackModels": [
+          "openai-codex/gpt-5.5"
+        ]
       },
       "researcher": {
         "model": "openai-codex/gpt-5.5",
-        "thinking": "medium"
+        "thinking": "medium",
+        "fallbackModels": [
+          "claude-bridge/claude-opus-4-8"
+        ]
       },
       "worker": {
+        "model": "claude-bridge/claude-opus-4-8",
+        "thinking": "high",
+        "fallbackModels": [
+          "claude-bridge/claude-fable-5"
+        ]
+      },
+      "reviewer": {
         "model": "claude-bridge/claude-opus-4-8",
         "thinking": "high",
         "fallbackModels": [
           "openai-codex/gpt-5.5"
         ]
       },
-      "reviewer": {
-        "model": "claude-bridge/claude-opus-4-8",
-        "thinking": "high"
-      },
       "oracle": {
         "model": "claude-bridge/claude-opus-4-8",
-        "thinking": "high"
+        "thinking": "xhigh",
+        "fallbackModels": [
+          "openai-codex/gpt-5.5"
+        ]
       },
       "delegate": {
-        "model": "openai-codex/gpt-5.5",
-        "thinking": "medium"
+        "model": "claude-bridge/claude-fable-5",
+        "thinking": "medium",
+        "fallbackModels": [
+          "claude-bridge/claude-opus-4-8"
+        ]
       }
     }
   }

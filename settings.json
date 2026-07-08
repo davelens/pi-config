@@ -9,7 +9,6 @@
   "lastChangelogVersion": "0.80.3",
   "packages": [
     "git:github.com/elidickinson/pi-claude-bridge",
-    "npm:pi-intercom",
     "npm:pi-mcp-adapter",
     "npm:pi-subagents",
     "npm:pi-prompt-template-model",

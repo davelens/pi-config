@@ -1,8 +1,8 @@
 {
   "autocompleteMaxVisible": 5,
   "collapseChangelog": true,
-  "defaultModel": "claude-opus-4-8",
-  "defaultProvider": "claude-bridge",
+  "defaultModel": "gpt-5.6-sol",
+  "defaultProvider": "openai-codex",
   "defaultThinkingLevel": "high",
   "editorPaddingX": 1,
   "hideThinkingBlock": true,
@@ -25,53 +25,59 @@
   "subagents": {
     "agentOverrides": {
       "scout": {
-        "model": "claude-bridge/claude-sonnet-5",
-        "thinking": "low"
-      },
-      "planner": {
-        "model": "openai-codex/gpt-5.5",
-        "thinking": "high"
-      },
-      "context-builder": {
-        "model": "claude-bridge/claude-fable-5",
+        "model": "openai-codex/gpt-5.6-luna",
         "thinking": "low",
         "fallbackModels": [
-          "openai-codex/gpt-5.5"
+          "claude-bridge/claude-sonnet-5"
         ]
       },
-      "researcher": {
-        "model": "openai-codex/gpt-5.5",
-        "thinking": "medium",
-        "fallbackModels": [
-          "claude-bridge/claude-opus-4-8"
-        ]
-      },
-      "worker": {
-        "model": "claude-bridge/claude-opus-4-8",
+      "planner": {
+        "model": "openai-codex/gpt-5.6-sol",
         "thinking": "high",
         "fallbackModels": [
           "claude-bridge/claude-fable-5"
         ]
       },
-      "reviewer": {
-        "model": "claude-bridge/claude-opus-4-8",
-        "thinking": "high",
-        "fallbackModels": [
-          "openai-codex/gpt-5.5"
-        ]
-      },
-      "oracle": {
-        "model": "claude-bridge/claude-opus-4-8",
-        "thinking": "xhigh",
-        "fallbackModels": [
-          "openai-codex/gpt-5.5"
-        ]
-      },
-      "delegate": {
+      "context-builder": {
         "model": "claude-bridge/claude-fable-5",
         "thinking": "medium",
         "fallbackModels": [
-          "claude-bridge/claude-opus-4-8"
+          "openai-codex/gpt-5.6-terra"
+        ]
+      },
+      "researcher": {
+        "model": "claude-bridge/claude-sonnet-5",
+        "thinking": "medium",
+        "fallbackModels": [
+          "openai-codex/gpt-5.6-terra"
+        ]
+      },
+      "worker": {
+        "model": "openai-codex/gpt-5.6-sol",
+        "thinking": "high",
+        "fallbackModels": [
+          "claude-bridge/claude-sonnet-5"
+        ]
+      },
+      "reviewer": {
+        "model": "claude-bridge/claude-fable-5",
+        "thinking": "high",
+        "fallbackModels": [
+          "openai-codex/gpt-5.6-sol"
+        ]
+      },
+      "oracle": {
+        "model": "claude-bridge/claude-fable-5",
+        "thinking": "xhigh",
+        "fallbackModels": [
+          "openai-codex/gpt-5.6-sol"
+        ]
+      },
+      "delegate": {
+        "model": "openai-codex/gpt-5.6-luna",
+        "thinking": "medium",
+        "fallbackModels": [
+          "claude-bridge/claude-sonnet-5"
         ]
       }
     }

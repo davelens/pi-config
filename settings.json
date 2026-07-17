@@ -6,13 +6,14 @@
   "defaultThinkingLevel": "high",
   "editorPaddingX": 1,
   "hideThinkingBlock": true,
-  "lastChangelogVersion": "0.80.6",
+  "lastChangelogVersion": "0.80.10",
   "packages": [
     "git:github.com/elidickinson/pi-claude-bridge",
     "npm:pi-mcp-adapter",
     "npm:pi-subagents",
     "npm:pi-prompt-template-model",
-    "npm:@quintinshaw/pi-dynamic-workflows"
+    "npm:@quintinshaw/pi-dynamic-workflows",
+    "npm:@aliou/pi-guardrails"
   ],
   "theme": "catppuccin-mocha",
   "terminal": {

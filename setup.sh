@@ -7,6 +7,22 @@ EXPECTED_DIR="$XDG_CONFIG_HOME/pi"
 
 [ -n "${PI_CODING_AGENT_DIR:-}" ] && EXPECTED_DIR="$PI_CODING_AGENT_DIR"
 
+# Portable stand-in for `ln -sfnT`: BSD/macOS ln has no -T, and plain -sfn
+# would place the link *inside* an existing directory instead of replacing it.
+force_symlink() {
+  local target="$1"
+  local link="$2"
+
+  if [ -L "$link" ]; then
+    rm -f "$link"
+  elif [ -e "$link" ]; then
+    echo "⚠ $link exists as a real file/directory; move it aside and rerun setup."
+    return 1
+  fi
+
+  ln -s "$target" "$link"
+}
+
 link_xdg_compat_paths() {
   # Pi itself respects PI_CODING_AGENT_DIR. Some third-party packages still
   # hardcode ~/.pi/agent, so keep that legacy path as a symlink into XDG config.
@@ -14,12 +30,13 @@ link_xdg_compat_paths() {
   compat_root="$(dirname "$EXPECTED_DIR")/pi-compat"
 
   mkdir -p "$compat_root"
-  ln -sfnT "$EXPECTED_DIR" "$compat_root/agent"
+  # A failed compat symlink is a warning, not a reason to abort the setup.
+  force_symlink "$EXPECTED_DIR" "$compat_root/agent" || true
 
   if [ -e "$HOME/.pi" ] && [ ! -L "$HOME/.pi" ]; then
     echo "⚠ $HOME/.pi exists as a real directory; move it aside and rerun setup to enable XDG compatibility symlink."
   else
-    ln -sfnT "$compat_root" "$HOME/.pi"
+    force_symlink "$compat_root" "$HOME/.pi" || true
   fi
 }
 

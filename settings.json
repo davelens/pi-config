@@ -13,7 +13,8 @@
     "npm:pi-subagents",
     "npm:pi-prompt-template-model",
     "npm:@quintinshaw/pi-dynamic-workflows",
-    "npm:@aliou/pi-guardrails"
+    "npm:@aliou/pi-guardrails",
+    "git:github.com/DietrichGebert/ponytail"
   ],
   "theme": "catppuccin-mocha",
   "terminal": {

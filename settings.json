@@ -8,12 +8,10 @@
   "hideThinkingBlock": true,
   "lastChangelogVersion": "0.82.1",
   "packages": [
-    "git:github.com/elidickinson/pi-claude-bridge",
     "npm:pi-mcp-adapter",
     "npm:pi-subagents",
-    "npm:pi-prompt-template-model",
-    "npm:@quintinshaw/pi-dynamic-workflows",
     "npm:@aliou/pi-guardrails",
+    "git:github.com/elidickinson/pi-claude-bridge",
     "git:github.com/DietrichGebert/ponytail"
   ],
   "theme": "catppuccin-mocha",

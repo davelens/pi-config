@@ -1,5 +1,9 @@
 {
+  "askClaude": {
+    "enabled": false
+  },
   "provider": {
     "pathToClaudeCodeExecutable": "/usr/bin/claude"
-  }
+  },
+  "startupNoticeShown": "2026-07-29"
 }

@@ -53,7 +53,7 @@
         ]
       },
       "worker": {
-        "model": "openai-codex/gpt-5.6-sol",
+        "model": "claude-bridge/claude-fable-5",
         "thinking": "high",
         "fallbackModels": [
           "claude-bridge/claude-sonnet-5"

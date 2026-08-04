@@ -1,5 +1,5 @@
 {
   "intercomBridge": {
-    "mode": "off"
+    "mode": "always"
   }
 }

@@ -6,14 +6,116 @@
       "apiKey": "llama",
       "compat": {
         "supportsDeveloperRole": true,
-        "supportsReasoningEffort": false
+        "supportsReasoningEffort": false,
+        "supportsStore": false,
+        "maxTokensField": "max_tokens"
       },
       "models": [
         {
-          "id": "local",
+          "id": "gemma-4-31b-it-q8",
+          "name": "Gemma 4 31B IT (Q8_K_XL)",
           "reasoning": true,
-          "name": "llama.cpp",
-          "input": ["text", "image"]
+          "thinkingLevelMap": {
+            "minimal": null,
+            "low": null,
+            "medium": null,
+            "high": "high",
+            "xhigh": null,
+            "max": null
+          },
+          "input": ["text"],
+          "contextWindow": 131072,
+          "maxTokens": 65536,
+          "compat": {
+            "thinkingFormat": "chat-template",
+            "chatTemplateKwargs": {
+              "enable_thinking": { "$var": "thinking.enabled" }
+            }
+          }
+        },
+        {
+          "id": "ornith-1.0-35b-q4",
+          "name": "Ornith 1.0 35B (Q4_K_M)",
+          "reasoning": true,
+          "thinkingLevelMap": {
+            "minimal": null,
+            "low": null,
+            "medium": null,
+            "high": "high",
+            "xhigh": null,
+            "max": null
+          },
+          "input": ["text"],
+          "contextWindow": 131072,
+          "maxTokens": 65536,
+          "compat": {
+            "thinkingFormat": "qwen-chat-template"
+          }
+        },
+        {
+          "id": "ornith-1.0-35b-q5",
+          "name": "Ornith 1.0 35B (Q5_K_M)",
+          "reasoning": true,
+          "thinkingLevelMap": {
+            "minimal": null,
+            "low": null,
+            "medium": null,
+            "high": "high",
+            "xhigh": null,
+            "max": null
+          },
+          "input": ["text"],
+          "contextWindow": 131072,
+          "maxTokens": 65536,
+          "compat": {
+            "thinkingFormat": "qwen-chat-template"
+          }
+        },
+        {
+          "id": "qwen3.6-27b-q6",
+          "name": "Qwen 3.6 27B (Q6_K_XL)",
+          "reasoning": true,
+          "thinkingLevelMap": {
+            "minimal": null,
+            "low": null,
+            "medium": null,
+            "high": "high",
+            "xhigh": null,
+            "max": null
+          },
+          "input": ["text"],
+          "contextWindow": 131072,
+          "maxTokens": 65536,
+          "compat": {
+            "thinkingFormat": "qwen-chat-template"
+          }
+        },
+        {
+          "id": "qwen3.6-35b-a3b-q4",
+          "name": "Qwen 3.6 35B A3B (Q4_K_M)",
+          "reasoning": true,
+          "thinkingLevelMap": {
+            "minimal": null,
+            "low": null,
+            "medium": null,
+            "high": "high",
+            "xhigh": null,
+            "max": null
+          },
+          "input": ["text"],
+          "contextWindow": 131072,
+          "maxTokens": 65536,
+          "compat": {
+            "thinkingFormat": "qwen-chat-template"
+          }
+        },
+        {
+          "id": "qwen3-coder-next-q8",
+          "name": "Qwen3 Coder Next (Q8_0)",
+          "reasoning": false,
+          "input": ["text"],
+          "contextWindow": 131072,
+          "maxTokens": 65536
         }
       ]
     }

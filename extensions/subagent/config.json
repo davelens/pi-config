@@ -1,5 +1,6 @@
 {
-  "intercomBridge": {
-    "mode": "always"
-  }
+ "intercomBridge": {
+   "mode": "always"
+ },
+ "toolDescriptionMode": "compact"
 }

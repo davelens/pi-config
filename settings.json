@@ -20,7 +20,8 @@
     "npm:pi-mcp-adapter",
     "npm:pi-rewind",
     "npm:pi-subagents",
-    "npm:pi-tool-display"
+    "npm:pi-tool-display",
+    "npm:pi-powerline"
   ],
   "theme": "catppuccin-mocha",
   "terminal": {

@@ -5,6 +5,7 @@ extensions/guardrails.json
 git/
 intercom/
 mcp-oauth/
+missions/
 node_modules/
 npm/
 sessions/

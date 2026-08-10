@@ -12,7 +12,13 @@
     "npm:pi-subagents",
     "npm:@aliou/pi-guardrails",
     "git:github.com/elidickinson/pi-claude-bridge",
-    "git:github.com/DietrichGebert/ponytail"
+    "git:github.com/DietrichGebert/ponytail",
+    "npm:pi-agent-loop",
+    "npm:pi-execution-time",
+    "npm:pi-tool-display",
+    "npm:@agnishc/edb-agent-steer",
+    "npm:@diegopetrucci/pi-brrr",
+    "npm:@diegopetrucci/pi-quiet-tools"
   ],
   "theme": "catppuccin-mocha",
   "terminal": {

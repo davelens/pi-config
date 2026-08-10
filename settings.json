@@ -27,7 +27,7 @@
   "terminal": {
     "showTerminalProgress": true
   },
-  "treeFilterMode": "default",
+  "treeFilterMode": "user-only",
   "skills": [
     "~/.config/agents/skills/pi"
   ],
@@ -90,5 +90,15 @@
         ]
       }
     }
-  }
+  },
+  "httpIdleTimeoutMs": 60000,
+  "markdown": {
+    "mermaid": "streaming"
+  },
+  "showCacheMissNotices": true,
+  "quietStartup": true,
+  "defaultProjectTrust": "always",
+  "doubleEscapeAction": "tree",
+  "tuiMode": "regular",
+  "fullscreenScrollbar": "auto"
 }

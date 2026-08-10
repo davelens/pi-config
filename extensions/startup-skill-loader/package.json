@@ -4,5 +4,8 @@
   "author": "Dave lens",
   "description": "Loads AGENTS.md startup skills into the system prompt before agent start",
   "type": "module",
+  "scripts": {
+    "test": "node --test --experimental-strip-types index.test.ts"
+  },
   "dependencies": {}
 }

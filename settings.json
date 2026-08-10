@@ -8,17 +8,19 @@
   "hideThinkingBlock": true,
   "lastChangelogVersion": "0.84.1",
   "packages": [
-    "npm:pi-mcp-adapter",
-    "npm:pi-subagents",
-    "npm:@aliou/pi-guardrails",
-    "git:github.com/elidickinson/pi-claude-bridge",
     "git:github.com/DietrichGebert/ponytail",
+    "git:github.com/elidickinson/pi-claude-bridge",
+    "npm:@agnishc/edb-agent-steer",
+    "npm:@aliou/pi-guardrails",
+    "npm:@diegopetrucci/pi-brrr",
+    "npm:@diegopetrucci/pi-quiet-tools",
+    "npm:@juicesharp/rpiv-ask-user-question",
     "npm:pi-agent-loop",
     "npm:pi-execution-time",
-    "npm:pi-tool-display",
-    "npm:@agnishc/edb-agent-steer",
-    "npm:@diegopetrucci/pi-brrr",
-    "npm:@diegopetrucci/pi-quiet-tools"
+    "npm:pi-mcp-adapter",
+    "npm:pi-rewind",
+    "npm:pi-subagents",
+    "npm:pi-tool-display"
   ],
   "theme": "catppuccin-mocha",
   "terminal": {

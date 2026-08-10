@@ -1,8 +1,0 @@
-{
-  "name": "condensed-footer",
-  "version": "0.1.0",
-  "author": "Dave lens",
-  "description": "Condensed footer showing spent context tokens and context window size",
-  "type": "module",
-  "dependencies": {}
-}

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import notify from "../extensions/notify.ts";
+import notify from "../extensions/notify/index.ts";
 
 const handlers = {};
 const commands = {};
@@ -8,6 +8,7 @@ const entries = [{
   message: { role: "assistant", content: [{ type: "text", text: "Done." }] },
 }];
 let pushes = 0;
+let desktopNotifications = 0;
 
 process.env.NTFY_URL = "https://example.test/pi";
 globalThis.fetch = async () => {
@@ -19,7 +20,10 @@ const pi = {
   on: (event, handler) => handlers[event] = handler,
   registerCommand: (name, command) => commands[name] = command,
   appendEntry: (customType, data) => entries.push({ type: "custom", customType, data }),
-  exec: async () => ({ code: 0 }),
+  exec: async () => {
+    desktopNotifications++;
+    return { code: 0 };
+  },
 };
 const ctx = {
   cwd: "/tmp/project",
@@ -30,10 +34,16 @@ const ctx = {
 
 notify(pi);
 await handlers.session_start({}, ctx);
-await commands.phone.handler("once", ctx);
+await commands["notify-desktop"].handler("off", ctx);
+await commands["notify-phone"].handler("once", ctx);
 await handlers.agent_settled({}, ctx);
 await handlers.agent_settled({}, ctx);
 
 assert.equal(pushes, 1);
+assert.equal(desktopNotifications, 0);
 assert.equal(entries.at(-1).data.mode, "off");
+
+await commands["notify-desktop"].handler("on", ctx);
+await handlers.agent_settled({}, ctx);
+assert.equal(desktopNotifications, 1);
 console.log("notify test passed");

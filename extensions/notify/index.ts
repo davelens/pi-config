@@ -9,6 +9,7 @@ const phoneConfig = join(homedir(), ".config/ntfy/pi-url");
 
 export default function notify(pi: ExtensionAPI) {
   let phoneMode: PhoneMode = "off";
+  let desktopEnabled = true;
 
   const setPhoneMode = (mode: PhoneMode, ctx: ExtensionContext) => {
     phoneMode = mode;
@@ -16,18 +17,32 @@ export default function notify(pi: ExtensionAPI) {
     ctx.ui.setStatus("phone-notify", mode === "off" ? undefined : `phone:${mode}`);
   };
 
+  const setDesktopEnabled = (enabled: boolean, ctx: ExtensionContext) => {
+    desktopEnabled = enabled;
+    pi.appendEntry("desktop-notify", { enabled });
+    ctx.ui.setStatus("desktop-notify", enabled ? undefined : "desktop:off");
+  };
+
   pi.on("session_start", (_event, ctx) => {
-    const saved = ctx.sessionManager.getBranch().findLast(
+    const phoneSaved = ctx.sessionManager.getBranch().findLast(
       entry => entry.type === "custom" && entry.customType === "phone-notify",
     );
-    const mode = saved?.type === "custom"
-      ? (saved.data as { mode?: PhoneMode })?.mode
+    const mode = phoneSaved?.type === "custom"
+      ? (phoneSaved.data as { mode?: PhoneMode })?.mode
       : undefined;
     phoneMode = mode === "on" || mode === "once" ? mode : "off";
     ctx.ui.setStatus("phone-notify", phoneMode === "off" ? undefined : `phone:${phoneMode}`);
+
+    const desktopSaved = ctx.sessionManager.getBranch().findLast(
+      entry => entry.type === "custom" && entry.customType === "desktop-notify",
+    );
+    desktopEnabled = desktopSaved?.type === "custom"
+      ? (desktopSaved.data as { enabled?: boolean })?.enabled !== false
+      : true;
+    ctx.ui.setStatus("desktop-notify", desktopEnabled ? undefined : "desktop:off");
   });
 
-  pi.registerCommand("phone", {
+  pi.registerCommand("notify-phone", {
     description: "Control phone notifications: on, off, or once",
     handler: async (args, ctx) => {
       const mode = args.trim();
@@ -36,11 +51,28 @@ export default function notify(pi: ExtensionAPI) {
         return;
       }
       if (mode !== "on" && mode !== "off" && mode !== "once") {
-        ctx.ui.notify("Usage: /phone on|off|once", "error");
+        ctx.ui.notify("Usage: /notify-phone on|off|once", "error");
         return;
       }
       setPhoneMode(mode, ctx);
       ctx.ui.notify(`Phone notifications: ${mode}`, "info");
+    },
+  });
+
+  pi.registerCommand("notify-desktop", {
+    description: "Enable or disable desktop notifications",
+    handler: async (args, ctx) => {
+      const mode = args.trim();
+      if (!mode) {
+        ctx.ui.notify(`Desktop notifications: ${desktopEnabled ? "on" : "off"}`, "info");
+        return;
+      }
+      if (mode !== "on" && mode !== "off") {
+        ctx.ui.notify("Usage: /notify-desktop on|off", "error");
+        return;
+      }
+      setDesktopEnabled(mode === "on", ctx);
+      ctx.ui.notify(`Desktop notifications: ${mode}`, "info");
     },
   });
 
@@ -60,11 +92,13 @@ export default function notify(pi: ExtensionAPI) {
     const title = requiresInput ? "Pi requires input" : "Pi is idle";
     const project = basename(ctx.cwd);
 
-    await pi.exec("notify-send", [
-      "-u", requiresInput ? "critical" : "normal",
-      "-a", "Pi",
-      "--", title, project,
-    ]);
+    if (desktopEnabled) {
+      await pi.exec("notify-send", [
+        "-u", requiresInput ? "critical" : "normal",
+        "-a", "Pi",
+        "--", title, project,
+      ]);
+    }
 
     if (phoneMode === "off") return;
 

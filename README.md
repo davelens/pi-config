@@ -53,12 +53,14 @@ The smart switcher:
 
 ## Notifications
 
-`extensions/notify.ts` always sends desktop notifications when Pi settles. Phone notifications use the ntfy endpoint in `~/.config/ntfy/pi-url` and default to off per session:
+`extensions/notify/index.ts` sends notifications when Pi settles. New sessions default to desktop notifications on and phone notifications off; changes persist when a session is resumed. Phone notifications use the ntfy endpoint in `~/.config/ntfy/pi-url`.
 
-- `/phone on` — notify after every settled run
-- `/phone once` — notify after the next settled run
-- `/phone off` — disable phone notifications
-- `/phone` — show the current mode
+- `/notify-desktop on|off` — enable or disable desktop notifications
+- `/notify-desktop` — show the desktop notification state
+- `/notify-phone on` — notify the phone after every settled run
+- `/notify-phone once` — notify the phone after the next settled run
+- `/notify-phone off` — disable phone notifications
+- `/notify-phone` — show the phone notification mode
 
 ## Adding packages
 

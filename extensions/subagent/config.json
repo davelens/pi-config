@@ -2,5 +2,5 @@
  "intercomBridge": {
    "mode": "always"
  },
- "toolDescriptionMode": "compact"
+ "toolDescriptionMode": "custom"
 }

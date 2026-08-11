@@ -12,7 +12,6 @@
     "git:github.com/elidickinson/pi-claude-bridge",
     "npm:@agnishc/edb-agent-steer",
     "npm:@aliou/pi-guardrails",
-    "npm:@diegopetrucci/pi-brrr",
     "npm:@diegopetrucci/pi-quiet-tools",
     "npm:@juicesharp/rpiv-ask-user-question",
     "npm:pi-agent-loop",

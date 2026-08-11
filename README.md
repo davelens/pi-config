@@ -51,6 +51,15 @@ The smart switcher:
 
 `/resume` remains Pi's built-in session picker; extensions cannot override that literal command from this config repo.
 
+## Notifications
+
+`extensions/notify.ts` always sends desktop notifications when Pi settles. Phone notifications use the ntfy endpoint in `~/.config/ntfy/pi-url` and default to off per session:
+
+- `/phone on` — notify after every settled run
+- `/phone once` — notify after the next settled run
+- `/phone off` — disable phone notifications
+- `/phone` — show the current mode
+
 ## Adding packages
 
 Edit `settings.json` and add to the `packages` array:

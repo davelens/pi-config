@@ -11,30 +11,31 @@ import {
   SessionManager,
   SettingsManager,
   truncateHead,
+  type AgentSessionEvent,
   type ExtensionAPI,
   type ExtensionCommandContext,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import { discoverAgents, type AgentConfig } from "./agents.ts";
 import { ensureDefaultAgents } from "./agent-files.ts";
 import { SubagentManager } from "./manager.ts";
-import { acquireMutationLock, finishRunReport, startRunReport, type RunReport } from "./reports.ts";
+import { acquireMutationLock, finishRunReport, startRunReport } from "./reports.ts";
+import { captureRunMessage, trackRun, type ActiveRun } from "./run-stream.ts";
+import { SubagentStatus } from "./status.ts";
 
 const DEFAULT_AGENTS = fileURLToPath(new URL("./default-agents", import.meta.url));
 const AGENTS_DIRECTORY = join(homedir(), ".config", "agents", "pi");
 const REPORTS_DIRECTORY = join(AGENTS_DIRECTORY, "reports");
+const readOnlyBashSchema = Type.Object({
+  command: StringEnum(["git diff", "git diff --cached", "git status --short"] as const),
+});
+type ReadOnlyBashInput = Static<typeof readOnlyBashSchema>;
 
 interface AgentResult {
   output: string;
   model: string;
-}
-
-interface ActiveRun {
-  report: RunReport;
-  controller: AbortController;
-  promise: Promise<void>;
 }
 
 function projectSettings(cwd: string): string | undefined {
@@ -88,7 +89,7 @@ function resolveModel(modelName: string | undefined, agent: AgentConfig, ctx: Ex
   return model;
 }
 
-async function runAttempt(agent: AgentConfig, task: string, cwd: string, modelName: string | undefined, signal: AbortSignal, ctx: ExtensionContext): Promise<AgentResult> {
+async function runAttempt(agent: AgentConfig, task: string, cwd: string, modelName: string | undefined, signal: AbortSignal, ctx: ExtensionContext, pi: ExtensionAPI, onEvent?: (event: AgentSessionEvent) => void): Promise<AgentResult> {
   const model = resolveModel(modelName, agent, ctx);
   const modelRuntime = await ModelRuntime.create({ refreshOnCreate: false, signal });
   const provider = ctx.modelRegistry.getProvider(model.provider);
@@ -114,17 +115,35 @@ async function runAttempt(agent: AgentConfig, task: string, cwd: string, modelNa
   });
   await resourceLoader.reload();
 
+  const readOnlyBash = agent.tools.includes("git_inspect") ? [{
+    name: "git_inspect",
+    label: "Read-only Git",
+    description: "Run one allowed read-only Git inspection command",
+    parameters: readOnlyBashSchema,
+    async execute(_id: string, params: ReadOnlyBashInput, toolSignal?: AbortSignal) {
+      const safeGit = ["--no-pager", "--no-optional-locks", "-c", "core.fsmonitor=false"];
+      const result = await pi.exec("git", params.command === "git status --short"
+        ? [...safeGit, "status", "--short"]
+        : params.command === "git diff --cached"
+          ? [...safeGit, "diff", "--cached", "--no-ext-diff", "--no-textconv"]
+          : [...safeGit, "diff", "--no-ext-diff", "--no-textconv"], { cwd, signal: toolSignal });
+      if (result.code !== 0) throw new Error(result.stderr || `git exited with ${result.code}`);
+      return { content: [{ type: "text" as const, text: result.stdout || "(no output)" }], details: {} };
+    },
+  }] : [];
   const { session } = await createAgentSession({
     cwd,
     model,
     modelRuntime,
     thinkingLevel: agent.thinking,
     tools: agent.tools,
+    customTools: readOnlyBash,
     resourceLoader,
     sessionManager: SessionManager.inMemory(cwd),
     settingsManager,
   });
   const abort = () => void session.abort();
+  const unsubscribe = onEvent ? session.subscribe(onEvent) : undefined;
   signal.addEventListener("abort", abort, { once: true });
 
   try {
@@ -136,16 +155,17 @@ async function runAttempt(agent: AgentConfig, task: string, cwd: string, modelNa
     };
   } finally {
     signal.removeEventListener("abort", abort);
+    unsubscribe?.();
     session.dispose();
   }
 }
 
-async function runAgent(agent: AgentConfig, task: string, cwd: string, signal: AbortSignal, ctx: ExtensionContext): Promise<AgentResult> {
+async function runAgent(agent: AgentConfig, task: string, cwd: string, signal: AbortSignal, ctx: ExtensionContext, pi: ExtensionAPI, onEvent?: (event: AgentSessionEvent) => void): Promise<AgentResult> {
   const candidates = [...new Set([agent.model, ...(agent.fallbackModels ?? [])])];
   const errors: string[] = [];
   for (const candidate of candidates.length ? candidates : [undefined]) {
     try {
-      return await runAttempt(agent, task, cwd, candidate, signal, ctx);
+      return await runAttempt(agent, task, cwd, candidate, signal, ctx, pi, onEvent);
     } catch (error) {
       if (signal.aborted) throw error;
       errors.push(`${candidate ?? "parent model"}: ${error instanceof Error ? error.message : String(error)}`);
@@ -157,6 +177,7 @@ async function runAgent(agent: AgentConfig, task: string, cwd: string, signal: A
 export default function subagents(pi: ExtensionAPI) {
   ensureDefaultAgents(DEFAULT_AGENTS, AGENTS_DIRECTORY);
   const runs = new Map<string, ActiveRun>();
+  let refreshStatus: (() => void) | undefined;
   let shuttingDown = false;
 
   pi.on("session_shutdown", async () => {
@@ -165,6 +186,32 @@ export default function subagents(pi: ExtensionAPI) {
       if (run.report.status === "running") run.controller.abort();
     }
     await Promise.allSettled([...runs.values()].map(({ promise }) => promise));
+  });
+
+  pi.registerCommand("subagents-status", {
+    description: "View live and completed subagent message streams",
+    handler: async (_args: string, ctx: ExtensionCommandContext) => {
+      const currentRuns = [...runs.values()];
+      if (!currentRuns.some(({ report }) => report.status === "running")) {
+        ctx.ui.notify("No subagents are running", "info");
+        return;
+      }
+      if (ctx.mode !== "tui") {
+        ctx.ui.notify("Subagent status requires the TUI", "error");
+        return;
+      }
+      try {
+        await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
+          refreshStatus = () => tui.requestRender();
+          return new SubagentStatus({ tui, theme, runs: () => [...runs.values()], done });
+        }, {
+          overlay: true,
+          overlayOptions: { anchor: "center", width: "100%", maxHeight: "100%" },
+        });
+      } finally {
+        refreshStatus = undefined;
+      }
+    },
   });
 
   pi.registerCommand("subagents", {
@@ -255,17 +302,21 @@ export default function subagents(pi: ExtensionAPI) {
         finishRunReport(report, { status: "failed", error: error instanceof Error ? error.message : String(error) });
         throw error;
       }
-      const controller = params.async ? new AbortController() : undefined;
-      const runSignal = controller?.signal ?? signal ?? new AbortController().signal;
+      const activeRun = trackRun(runs, report, signal, params.async === true);
+      refreshStatus?.();
       const execute = async () => {
         try {
-          const result = await runAgent(agent, params.task!, ctx.cwd, runSignal, ctx);
-          runSignal.throwIfAborted();
+          const result = await runAgent(agent, params.task!, ctx.cwd, activeRun.signal, ctx, pi, (event) => {
+            if (captureRunMessage(activeRun.messages, event)) refreshStatus?.();
+          });
+          activeRun.signal.throwIfAborted();
           finishRunReport(report, { status: "completed", model: result.model, output: result.output });
+          refreshStatus?.();
           return result;
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          finishRunReport(report, { status: runSignal.aborted ? "aborted" : "failed", error: message });
+          finishRunReport(report, { status: activeRun.signal.aborted ? "aborted" : "failed", error: message });
+          refreshStatus?.();
           throw error;
         } finally {
           releaseLock?.();
@@ -273,14 +324,13 @@ export default function subagents(pi: ExtensionAPI) {
       };
 
       if (params.async) {
-        const promise = execute()
+        activeRun.promise = execute()
           .then(() => {
             if (!shuttingDown) ctx.ui.notify(`${agent.name} completed: ${report.filePath}`, "info");
           })
           .catch((error) => {
             if (!shuttingDown) ctx.ui.notify(`${agent.name} ${report.status}: ${error instanceof Error ? error.message : String(error)}`, "error");
           });
-        runs.set(report.id, { report, controller: controller!, promise });
         return {
           content: [{ type: "text", text: `Started ${agent.name} asynchronously. Run ID: ${report.id}\nReport: ${report.filePath}` }],
           details: { run: report },
@@ -291,8 +341,10 @@ export default function subagents(pi: ExtensionAPI) {
         content: [{ type: "text", text: `${agent.name} is running…\nReport: ${report.filePath}` }],
         details: { agent: agent.name, report: report.filePath },
       });
+      const execution = execute();
+      activeRun.promise = execution.then(() => undefined, () => undefined);
       try {
-        const result = await execute();
+        const result = await execution;
         const truncated = truncateHead(result.output);
         return {
           content: [{

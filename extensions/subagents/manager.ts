@@ -1,6 +1,5 @@
 import { spawnSync } from "node:child_process";
 import {
-  existsSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -27,21 +26,10 @@ import type { AgentConfig } from "./agents.ts";
 import {
   createAgentDefinition,
   deleteAgentDefinition,
-  renameAgentDefinition,
+  renameAgentWithSettings,
   restoreDefaultAgents,
   withEffectiveSettings,
 } from "./agent-files.ts";
-
-function migrateOverride(settingsPath: string, oldName: string, newName: string): void {
-  if (!existsSync(settingsPath)) return;
-  const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
-  const overrides = settings.subagents?.agentOverrides;
-  if (!overrides?.[oldName]) return;
-  if (overrides[newName]) throw new Error(`Override '${newName}' already exists in ${settingsPath}`);
-  overrides[newName] = overrides[oldName];
-  delete overrides[oldName];
-  writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
-}
 
 function editDefinition(filePath: string, tui: TUI): boolean {
   const original = readFileSync(filePath, "utf8");
@@ -365,14 +353,7 @@ export class SubagentManager implements Component {
       const name = (await promptForName(this.options.tui, this.options.theme, "Rename subagent", agent.name))?.trim();
       if (!name || name === agent.name) return;
       if (this.agents.some((candidate) => candidate.name === name)) throw new Error(`Subagent '${name}' already exists`);
-      renameAgentDefinition(agent.filePath, name);
-      try {
-        for (const settingsPath of this.options.settingsPaths) migrateOverride(settingsPath, agent.name, name);
-      } catch (error) {
-        this.refresh(name);
-        this.feedback(`Renamed ${agent.name}, but could not migrate its override: ${error instanceof Error ? error.message : String(error)}`, "error");
-        return;
-      }
+      renameAgentWithSettings(agent.filePath, this.options.settingsPaths, agent.name, name);
       this.refresh(name);
       this.feedback(`Renamed ${agent.name} to ${name}`, "success");
     } catch (error) {

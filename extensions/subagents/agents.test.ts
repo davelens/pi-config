@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -9,11 +9,13 @@ import {
   deleteAgentDefinition,
   ensureDefaultAgents,
   renameAgentDefinition,
+  renameAgentWithSettings,
   replaceAgentBody,
   restoreDefaultAgents,
   withEffectiveSettings,
 } from "./agent-files.ts";
 import { acquireMutationLock, finishRunReport, startRunReport } from "./reports.ts";
+import { captureRunMessage, streamJump, trackRun, type RunMessage } from "./run-stream.ts";
 
 const definition = (name: string, description: string) => `---\nname: ${name}\ndescription: ${description}\ntools: read, grep\nthinking: low\n---\nBe useful.`;
 
@@ -40,6 +42,25 @@ test("parses definitions and applies settings overrides in order", () => {
   const parsed = parseAgent(definition("reviewer", "read only"));
   assert.deepEqual(parsed?.tools, ["read", "grep"]);
   assert.equal(parsed?.thinking, "low");
+});
+
+test("migrates unchanged legacy read-only agents in an existing directory", () => {
+  const root = mkdtempSync(join(tmpdir(), "lofi-subagent-migration-"));
+  const defaults = join(root, "defaults");
+  const agents = join(root, "agents");
+  mkdirSync(defaults);
+  mkdirSync(agents);
+  const currentScout = definition("scout", "default").replace("tools: read, grep", "tools: read, grep, find, ls");
+  const currentReviewer = definition("reviewer", "default").replace("tools: read, grep", "tools: read, grep, find, ls, git_inspect");
+  writeFileSync(join(defaults, "scout.md"), currentScout);
+  writeFileSync(join(defaults, "reviewer.md"), currentReviewer);
+  writeFileSync(join(agents, "scout.md"), currentScout.replace("tools: read, grep, find, ls", "tools: read, grep, find, ls, bash"));
+  writeFileSync(join(agents, "reviewer.md"), currentReviewer.replace("tools: read, grep, find, ls, git_inspect", "tools: read, grep, find, ls, bash"));
+
+  ensureDefaultAgents(defaults, agents);
+
+  assert.equal(readFileSync(join(agents, "scout.md"), "utf8"), currentScout);
+  assert.equal(readFileSync(join(agents, "reviewer.md"), "utf8"), currentReviewer);
 });
 
 test("seeds only a missing directory and restores defaults", () => {
@@ -100,6 +121,92 @@ test("locks mutation-capable async runs per working directory", () => {
   release();
   const releaseAgain = acquireMutationLock(directory, process.cwd(), "second");
   releaseAgain();
+});
+
+test("publishes only fully initialized writer locks", () => {
+  const directory = mkdtempSync(join(tmpdir(), "lofi-subagent-lock-race-"));
+  const release = acquireMutationLock(directory, process.cwd(), "first");
+  const entries = readdirSync(join(directory, ".locks"));
+
+  assert.equal(entries.length, 1);
+  assert.equal(existsSync(join(directory, ".locks", entries[0]!, "owner.json")), true);
+  release();
+});
+
+test("refuses unsafe stale writer-lock reclamation", () => {
+  const directory = mkdtempSync(join(tmpdir(), "lofi-subagent-stale-lock-"));
+  acquireMutationLock(directory, process.cwd(), "first");
+  const lockName = readdirSync(join(directory, ".locks"))[0]!;
+  writeFileSync(join(directory, ".locks", lockName, "owner.json"), JSON.stringify({ pid: 2 ** 30, runId: "first" }));
+
+  assert.throws(() => acquireMutationLock(directory, process.cwd(), "second"), /stale asynchronous writer lock/);
+});
+
+test("captures live messages and in-flight tool output", () => {
+  const messages: RunMessage[] = [];
+  captureRunMessage(messages, { type: "message_start", message: { role: "user", content: "Task" } });
+  captureRunMessage(messages, { type: "message_start", message: { role: "assistant", content: [{ type: "text", text: "Part" }] } });
+  captureRunMessage(messages, { type: "message_update", message: { role: "assistant", content: [{ type: "text", text: "Partial" }] } });
+  captureRunMessage(messages, { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Complete" }] } });
+  captureRunMessage(messages, { type: "tool_execution_start", toolCallId: "tool-1", toolName: "bash", args: { command: "printf hi" } });
+  captureRunMessage(messages, { type: "tool_execution_update", toolCallId: "tool-1", toolName: "bash", partialResult: { content: [{ type: "text", text: "h" }] } });
+  captureRunMessage(messages, { type: "tool_execution_end", toolCallId: "tool-1", toolName: "bash", result: { content: [{ type: "text", text: "hi" }] }, isError: false });
+
+  assert.equal(messages.length, 3);
+  assert.deepEqual(messages[1]?.content, [{ type: "text", text: "Complete" }]);
+  assert.deepEqual(messages[2], {
+    role: "toolExecution",
+    toolCallId: "tool-1",
+    toolName: "bash",
+    content: [{ type: "text", text: "hi" }],
+    isError: false,
+    status: "completed",
+  });
+});
+
+test("maps stream jump keys", () => {
+  assert.deepEqual(streamJump("g", false), { pendingG: true });
+  assert.deepEqual(streamJump("g", true), { jump: "top", pendingG: false });
+  assert.deepEqual(streamJump("G", false), { jump: "bottom", pendingG: false });
+  assert.deepEqual(streamJump("}", false), { jump: 10, pendingG: false });
+  assert.deepEqual(streamJump("{", false), { jump: -10, pendingG: false });
+});
+
+test("tracks foreground runs and forwards cancellation", () => {
+  const directory = mkdtempSync(join(tmpdir(), "lofi-subagent-foreground-"));
+  const report = startRunReport(directory, "reviewer", "Review this", "/project");
+  const runs = new Map();
+  const parent = new AbortController();
+  const run = trackRun(runs, report, parent.signal, false);
+
+  assert.equal(runs.get(report.id), run);
+  parent.abort();
+  assert.equal(run.signal.aborted, true);
+});
+
+test("preflights every settings override before renaming an agent", () => {
+  const directory = mkdtempSync(join(tmpdir(), "lofi-subagent-rename-"));
+  const source = join(directory, "reviewer.md");
+  const firstSettings = join(directory, "global.json");
+  const conflictingSettings = join(directory, "project.json");
+  writeFileSync(source, definition("reviewer", "Review code"));
+  writeFileSync(firstSettings, JSON.stringify({ subagents: { agentOverrides: { reviewer: { thinking: "high" } } } }));
+  writeFileSync(conflictingSettings, JSON.stringify({ subagents: { agentOverrides: { reviewer: {}, auditor: {} } } }));
+  const originalSettings = readFileSync(firstSettings, "utf8");
+
+  assert.throws(() => renameAgentWithSettings(source, [firstSettings, conflictingSettings], "reviewer", "auditor"), /already exists/);
+  assert.equal(existsSync(source), true);
+  assert.equal(existsSync(join(directory, "auditor.md")), false);
+  assert.equal(readFileSync(firstSettings, "utf8"), originalSettings);
+});
+
+test("default read-only agents are not mutation-capable", () => {
+  for (const name of ["scout", "reviewer"]) {
+    const agent = parseAgent(readFileSync(join(import.meta.dirname, "default-agents", `${name}.md`), "utf8"));
+    assert.deepEqual(agent?.tools.filter((tool) => ["bash", "edit", "write"].includes(tool)), []);
+  }
+  const reviewer = parseAgent(readFileSync(join(import.meta.dirname, "default-agents", "reviewer.md"), "utf8"));
+  assert.equal(reviewer?.tools.includes("git_inspect"), true);
 });
 
 test("creates, edits, and renames agent definition files", () => {

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 export type RunStatus = "running" | "completed" | "failed" | "aborted";
@@ -21,38 +21,50 @@ export interface RunReport {
 export function acquireMutationLock(directory: string, cwd: string, runId: string): () => void {
   const canonicalCwd = existsSync(cwd) ? realpathSync(cwd) : resolve(cwd);
   const locksDirectory = join(directory, ".locks");
-  const lockPath = join(locksDirectory, `${createHash("sha256").update(canonicalCwd).digest("hex")}.json`);
+  const lockPath = join(locksDirectory, createHash("sha256").update(canonicalCwd).digest("hex"));
+  const ownerPath = join(lockPath, "owner.json");
   mkdirSync(locksDirectory, { recursive: true });
 
   for (;;) {
+    const temporaryPath = mkdtempSync(join(locksDirectory, ".pending-"));
+    writeFileSync(join(temporaryPath, "owner.json"), JSON.stringify({ pid: process.pid, runId, cwd: canonicalCwd }));
     try {
-      writeFileSync(lockPath, JSON.stringify({ pid: process.pid, runId, cwd: canonicalCwd }), { flag: "wx" });
+      renameSync(temporaryPath, lockPath);
       break;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      rmSync(temporaryPath, { recursive: true, force: true });
+      if (!["EEXIST", "ENOTEMPTY"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
       let pid: number | undefined;
       try {
-        pid = JSON.parse(readFileSync(lockPath, "utf8")).pid;
+        pid = JSON.parse(readFileSync(ownerPath, "utf8")).pid;
       } catch {}
       if (typeof pid === "number") {
         try {
           process.kill(pid, 0);
-          throw new Error(`An asynchronous writer is already running in ${canonicalCwd}`);
         } catch (ownerError) {
-          if ((ownerError as NodeJS.ErrnoException).code !== "ESRCH") throw ownerError;
+          if ((ownerError as NodeJS.ErrnoException).code === "ESRCH") {
+            throw new Error(`A stale asynchronous writer lock blocks ${canonicalCwd}; remove ${lockPath}`);
+          }
+          throw ownerError;
         }
       }
-      try {
-        unlinkSync(lockPath);
-      } catch (unlinkError) {
-        if ((unlinkError as NodeJS.ErrnoException).code !== "ENOENT") throw unlinkError;
-      }
+      throw new Error(`An asynchronous writer is already running in ${canonicalCwd}`);
     }
   }
 
   return () => {
+    let owner: { runId?: string };
     try {
-      if (JSON.parse(readFileSync(lockPath, "utf8")).runId === runId) unlinkSync(lockPath);
+      owner = JSON.parse(readFileSync(ownerPath, "utf8"));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    if (owner.runId !== runId) return;
+    const releasedPath = `${lockPath}.released-${randomUUID()}`;
+    try {
+      renameSync(lockPath, releasedPath);
+      rmSync(releasedPath, { recursive: true, force: true });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }

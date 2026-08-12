@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   copyFileSync,
   existsSync,
@@ -15,7 +16,10 @@ import { dirname, join } from "node:path";
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 
 export function ensureDefaultAgents(defaultsDirectory: string, agentsDirectory: string): void {
-  if (existsSync(agentsDirectory)) return;
+  if (existsSync(agentsDirectory)) {
+    migrateLegacyReadOnlyAgents(defaultsDirectory, agentsDirectory);
+    return;
+  }
   mkdirSync(dirname(agentsDirectory), { recursive: true });
   const temporaryDirectory = mkdtempSync(join(dirname(agentsDirectory), ".pi-agents-"));
   try {
@@ -103,14 +107,75 @@ export function renameAgentDefinition(filePath: string, name: string): string {
   if (existsSync(target)) throw new Error(`Agent file already exists: ${target}`);
 
   const updated = replaceAgentName(readFileSync(filePath, "utf8"), name);
-  renameSync(filePath, target);
   try {
-    writeFileSync(target, updated);
+    writeFileSync(target, updated, { flag: "wx" });
+    unlinkSync(filePath);
   } catch (error) {
-    renameSync(target, filePath);
+    rmSync(target, { force: true });
     throw error;
   }
   return target;
+}
+
+function migrateLegacyReadOnlyAgents(defaultsDirectory: string, agentsDirectory: string): void {
+  const legacyTools = {
+    scout: "tools: read, grep, find, ls, bash",
+    reviewer: "tools: read, grep, find, ls, bash",
+  };
+  for (const [name, tools] of Object.entries(legacyTools)) {
+    const defaultPath = join(defaultsDirectory, `${name}.md`);
+    const managedPath = join(agentsDirectory, `${name}.md`);
+    if (!existsSync(defaultPath) || !existsSync(managedPath)) continue;
+    const current = readFileSync(defaultPath, "utf8");
+    const currentTools = current.match(/^tools:.*$/m)?.[0];
+    if (currentTools && readFileSync(managedPath, "utf8") === current.replace(currentTools, tools)) atomicWrite(managedPath, current);
+  }
+}
+
+function atomicWrite(filePath: string, content: string): void {
+  const temporaryPath = `${filePath}.${randomUUID()}.tmp`;
+  try {
+    writeFileSync(temporaryPath, content);
+    renameSync(temporaryPath, filePath);
+  } finally {
+    rmSync(temporaryPath, { force: true });
+  }
+}
+
+export function renameAgentWithSettings(filePath: string, settingsPaths: string[], oldName: string, newName: string): string {
+  const migrations = settingsPaths.flatMap((settingsPath) => {
+    if (!existsSync(settingsPath)) return [];
+    const original = readFileSync(settingsPath, "utf8");
+    const settings = JSON.parse(original);
+    const overrides = settings.subagents?.agentOverrides;
+    if (!overrides?.[oldName]) return [];
+    if (overrides[newName]) throw new Error(`Override '${newName}' already exists in ${settingsPath}`);
+    overrides[newName] = overrides[oldName];
+    delete overrides[oldName];
+    return [{ path: settingsPath, original, updated: `${JSON.stringify(settings, null, 2)}\n` }];
+  });
+
+  const target = renameAgentDefinition(filePath, newName);
+  try {
+    for (const migration of migrations) atomicWrite(migration.path, migration.updated);
+    return target;
+  } catch (error) {
+    const rollbackErrors: unknown[] = [];
+    for (const migration of migrations) {
+      try {
+        atomicWrite(migration.path, migration.original);
+      } catch (rollbackError) {
+        rollbackErrors.push(rollbackError);
+      }
+    }
+    try {
+      renameAgentDefinition(target, oldName);
+    } catch (rollbackError) {
+      rollbackErrors.push(rollbackError);
+    }
+    if (rollbackErrors.length) throw new AggregateError([error, ...rollbackErrors], "Agent rename and rollback failed");
+    throw error;
+  }
 }
 
 function validateName(name: string): void {

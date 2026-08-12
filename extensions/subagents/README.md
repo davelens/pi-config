@@ -12,7 +12,7 @@ subagent({ action: "status" })
 subagent({ action: "stop", runId: "..." })
 ```
 
-Pi already executes sibling tool calls concurrently, so parallel foreground work is multiple `subagent` calls in one turn. Set `async: true` to return immediately while a child continues in-process. Async runs last until their task finishes or the current Pi session exits, reloads, or is replaced; shutdown aborts them gracefully. Only one mutation-capable async agent (one with `bash`, `edit`, or `write`) can run per working directory.
+Pi already executes sibling tool calls concurrently, so parallel foreground work is multiple `subagent` calls in one turn. Set `async: true` to return immediately while a child continues in-process. Async runs last until their task finishes or the current Pi session exits, reloads, or is replaced; shutdown aborts them gracefully. Only one mutation-capable async agent (one with `bash`, `edit`, or `write`) can run per working directory. Shipped read-only agents omit unrestricted `bash`, so they can run concurrently. The reviewer gets `git_inspect`, limited to `git diff`, `git diff --cached`, and `git status --short`; add full `bash` explicitly when broader shell inspection is worth taking the writer lock.
 
 ## Manage agents
 
@@ -27,6 +27,8 @@ Run `/subagents` to open the two-pane manager:
 - `d` deletes the selected agent after a confirmation dialog.
 - `ctrl+shift+r` restores shipped defaults from the sidebar after a destructive confirmation.
 - `esc` closes the manager.
+
+Run `/subagents-status` while at least one subagent is active to inspect every run started in the current Pi process, including foreground runs and completed siblings. The popup follows the latest message by default; use `j`/`k` to scroll, `{`/`}` to jump ten rows, `gg`/`G` to jump to the top/bottom, and `ctrl+n`/`ctrl+p` or the sidebar to switch runs. A single run uses the full panel without a sidebar. If nothing is running, Pi shows an inline message instead of opening the popup.
 
 The deliberately awkward restore shortcut is shown in the footer so it remains discoverable without being easy to trigger accidentally. The manager shows save/error feedback in its footer. All editable agents live in `~/.config/agents/pi/`.
 

@@ -11,8 +11,9 @@ import {
   renameAgentDefinition,
   replaceAgentBody,
   restoreDefaultAgents,
-  withEffectiveModel,
+  withEffectiveSettings,
 } from "./agent-files.ts";
+import { acquireMutationLock, finishRunReport, startRunReport } from "./reports.ts";
 
 const definition = (name: string, description: string) => `---\nname: ${name}\ndescription: ${description}\ntools: read, grep\nthinking: low\n---\nBe useful.`;
 
@@ -51,19 +52,54 @@ test("seeds only a missing directory and restores defaults", () => {
   ensureDefaultAgents(defaults, agents);
   assert.equal(existsSync(join(agents, "scout.md")), true);
   writeFileSync(join(agents, "custom.md"), definition("custom", "custom"));
+  mkdirSync(join(agents, "reports"));
+  writeFileSync(join(agents, "reports", "saved.md"), "saved report");
   ensureDefaultAgents(defaults, agents);
   assert.equal(existsSync(join(agents, "custom.md")), true);
 
   restoreDefaultAgents(defaults, agents);
   assert.equal(existsSync(join(agents, "scout.md")), true);
   assert.equal(existsSync(join(agents, "custom.md")), false);
+  assert.equal(existsSync(join(agents, "reports", "saved.md")), true);
 });
 
-test("renders the effective model without changing the definition", () => {
+test("renders effective settings without changing the definition", () => {
   const content = `${definition("oracle", "second opinion").replace("thinking: low", "model: openai/old\nthinking: low")}\n`;
-  assert.match(withEffectiveModel(content, "claude-bridge/claude-fable-5"), /^model: claude-bridge\/claude-fable-5$/m);
-  assert.doesNotMatch(withEffectiveModel(content, "claude-bridge/claude-fable-5"), /openai\/old/);
-  assert.doesNotMatch(withEffectiveModel(content, undefined), /^model:/m);
+  const rendered = withEffectiveSettings(content, {
+    description: "effective description",
+    model: "claude-bridge/claude-fable-5",
+    fallbackModels: ["openai/fallback"],
+    thinking: "xhigh",
+    tools: ["read", "bash"],
+  });
+  assert.match(rendered, /^description: "effective description"$/m);
+  assert.match(rendered, /^model: "claude-bridge\/claude-fable-5"$/m);
+  assert.match(rendered, /^fallbackModels: "openai\/fallback"$/m);
+  assert.match(rendered, /^thinking: "xhigh"$/m);
+  assert.match(rendered, /^tools: "read, bash"$/m);
+  assert.match(withEffectiveSettings(content, { description: "", tools: [] }), /^description: ""$/m);
+  assert.match(withEffectiveSettings(content, { description: "", tools: [] }), /^tools: "\[\]"$/m);
+  assert.doesNotMatch(rendered, /openai\/old/);
+});
+
+test("persists a recoverable run report", () => {
+  const directory = mkdtempSync(join(tmpdir(), "lofi-subagent-reports-"));
+  const report = startRunReport(directory, "../../reviewer", "Review this", "/project");
+  assert.equal(report.filePath.startsWith(`${directory}/`), true);
+  assert.match(readFileSync(report.filePath, "utf8"), /Status: running/);
+  finishRunReport(report, { status: "completed", model: "openai/test", output: "Looks good." });
+  const content = readFileSync(report.filePath, "utf8");
+  assert.match(content, /Status: completed/);
+  assert.match(content, /## Report\n\nLooks good\./);
+});
+
+test("locks mutation-capable async runs per working directory", () => {
+  const directory = mkdtempSync(join(tmpdir(), "lofi-subagent-locks-"));
+  const release = acquireMutationLock(directory, process.cwd(), "first");
+  assert.throws(() => acquireMutationLock(directory, process.cwd(), "second"), /already running/);
+  release();
+  const releaseAgain = acquireMutationLock(directory, process.cwd(), "second");
+  releaseAgain();
 });
 
 test("creates, edits, and renames agent definition files", () => {

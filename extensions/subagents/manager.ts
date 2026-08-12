@@ -29,7 +29,7 @@ import {
   deleteAgentDefinition,
   renameAgentDefinition,
   restoreDefaultAgents,
-  withEffectiveModel,
+  withEffectiveSettings,
 } from "./agent-files.ts";
 
 function migrateOverride(settingsPath: string, oldName: string, newName: string): void {
@@ -262,7 +262,7 @@ export class SubagentManager implements Component {
 
     const current = this.currentAgent();
     const highlighted = current
-      ? highlightCode(withEffectiveModel(readFileSync(current.filePath, "utf8"), current.model), "markdown")
+      ? highlightCode(withEffectiveSettings(readFileSync(current.filePath, "utf8"), current), "markdown")
         .flatMap((line) => wrapTextWithAnsi(line, contentWidth))
       : ["No agents configured"];
     this.contentOffset = Math.min(this.contentOffset, Math.max(0, highlighted.length - bodyHeight));
@@ -402,7 +402,7 @@ export class SubagentManager implements Component {
   private async restoreDefaults(): Promise<void> {
     this.busy = true;
     try {
-      const confirmed = await confirmAction(this.options.tui, this.options.theme, "Restore default agents?", "This deletes every managed subagent file.", "Restore");
+      const confirmed = await confirmAction(this.options.tui, this.options.theme, "Restore default agents?", "This replaces every managed subagent definition.", "Restore");
       if (!confirmed) return;
       restoreDefaultAgents(this.options.defaultsDirectory, this.options.agentsDirectory);
       this.refresh();

@@ -31,8 +31,15 @@ export function ensureDefaultAgents(defaultsDirectory: string, agentsDirectory: 
 }
 
 export function restoreDefaultAgents(defaultsDirectory: string, agentsDirectory: string): void {
-  rmSync(agentsDirectory, { recursive: true, force: true });
-  ensureDefaultAgents(defaultsDirectory, agentsDirectory);
+  mkdirSync(agentsDirectory, { recursive: true });
+  for (const entry of readdirSync(agentsDirectory, { withFileTypes: true })) {
+    if ((entry.isFile() || entry.isSymbolicLink()) && entry.name.endsWith(".md")) unlinkSync(join(agentsDirectory, entry.name));
+  }
+  for (const entry of readdirSync(defaultsDirectory, { withFileTypes: true })) {
+    if (entry.isFile() && entry.name.endsWith(".md")) {
+      copyFileSync(join(defaultsDirectory, entry.name), join(agentsDirectory, entry.name));
+    }
+  }
 }
 
 export function agentDefinitionParts(content: string): { frontmatter: string; body: string } {
@@ -46,10 +53,27 @@ export function replaceAgentBody(content: string, body: string): string {
   return `${parts.frontmatter}${body.replace(/\s+$/, "")}\n`;
 }
 
-export function withEffectiveModel(content: string, model: string | undefined): string {
+export function withEffectiveSettings(content: string, agent: {
+  description: string;
+  model?: string;
+  fallbackModels?: string[];
+  thinking?: string;
+  tools: string[];
+}): string {
   const parts = agentDefinitionParts(content);
-  let frontmatter = parts.frontmatter.replace(/^model:\s*.*\r?\n/m, "");
-  if (model) frontmatter = frontmatter.replace(/---\r?\n$/, `model: ${model}\n---\n`);
+  let frontmatter = parts.frontmatter;
+  const fields = new Map<string, string | undefined>([
+    ["description", agent.description],
+    ["model", agent.model],
+    ["fallbackModels", agent.fallbackModels?.join(", ")],
+    ["thinking", agent.thinking],
+    ["tools", agent.tools.length ? agent.tools.join(", ") : "[]"],
+  ]);
+  for (const [name, value] of fields) {
+    const pattern = new RegExp(`^${name}:\\s*.*\\r?\\n`, "m");
+    frontmatter = frontmatter.replace(pattern, "");
+    if (value !== undefined) frontmatter = frontmatter.replace(/---\r?\n$/, `${name}: ${JSON.stringify(value)}\n---\n`);
+  }
   return frontmatter + parts.body;
 }
 

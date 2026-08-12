@@ -7,9 +7,12 @@ A small replacement for `pi-subagents`: one foreground tool, in-process Pi SDK s
 ```text
 subagent({ action: "list" })
 subagent({ action: "run", agent: "scout", task: "Trace the login flow." })
+subagent({ action: "run", agent: "reviewer", task: "Review the diff.", async: true })
+subagent({ action: "status" })
+subagent({ action: "stop", runId: "..." })
 ```
 
-Pi already executes sibling tool calls concurrently, so parallel work is multiple `subagent` calls in one turn. Sequential work is multiple parent turns. Do not run writers concurrently in one working directory.
+Pi already executes sibling tool calls concurrently, so parallel foreground work is multiple `subagent` calls in one turn. Set `async: true` to return immediately while a child continues in-process. Async runs last until their task finishes or the current Pi session exits, reloads, or is replaced; shutdown aborts them gracefully. Only one mutation-capable async agent (one with `bash`, `edit`, or `write`) can run per working directory.
 
 ## Manage agents
 
@@ -46,7 +49,7 @@ Override bundled or custom agents in global `settings.json`, or in a trusted pro
 }
 ```
 
-Project settings override global settings. Supported overrides are `description`, `model`, `fallbackModels`, `thinking`, and `tools`. Set `model` to `null` to inherit the parent model. Overrides only configure an agent that has a Markdown definition; they do not define its prompt.
+Project settings override global settings. Supported overrides are `description`, `model`, `fallbackModels`, `thinking`, and `tools`. Set `model` to `null` to inherit the parent model. Overrides only configure an agent that has a Markdown definition; they do not define its prompt. `/subagents` renders these effective values in the file view without changing the Markdown file.
 
 ## Define an agent
 
@@ -67,7 +70,9 @@ You are a fast codebase scout. Inspect only and return exact evidence.
 
 Supported frontmatter is deliberately limited to `name`, `description`, `model`, `thinking`, and comma-separated built-in `tools`. Omit `model` to inherit the parent model. Configure fallbacks through `settings.json`. Children inherit project context files, but not the parent conversation, skills, extensions, or session history; tasks must be self-contained.
 
-Restoring defaults deletes the entire managed directory and recopies `default-agents/*.md`. Configuration overrides in `settings.json` are not deleted.
+Restoring defaults deletes the managed agent definitions and recopies `default-agents/*.md`. Configuration overrides in `settings.json` are not deleted.
+
+Every run immediately creates a Markdown report under `~/.config/agents/pi/reports/`, then atomically updates it on completion, failure, or abort. Foreground output links to the full report, and async `status` returns report paths.
 
 ## Check
 

@@ -154,6 +154,31 @@ export function agentConfigurationIssues(agent: Pick<AgentConfig, "skills" | "to
   return agent.skills?.length && !agent.tools.includes("read") ? ["configured skills require the read tool"] : [];
 }
 
+export function diagnoseAgentDefinitions(directory: string): string[] {
+  if (!existsSync(directory)) return [`${directory}: directory is missing`];
+  const diagnostics: string[] = [];
+  const names = new Map<string, string>();
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    if (!entry.name.endsWith(".md") || (!entry.isFile() && !entry.isSymbolicLink())) continue;
+    const filePath = join(directory, entry.name);
+    try {
+      const agent = parseAgent(readFileSync(filePath, "utf8"), filePath);
+      if (!agent) {
+        diagnostics.push(`${filePath}: invalid or missing frontmatter, name, or description`);
+        continue;
+      }
+      const previous = names.get(agent.name);
+      if (previous) diagnostics.push(`${filePath}: duplicate agent name '${agent.name}' (also ${previous})`);
+      else names.set(agent.name, filePath);
+      if (agent.invalidTools?.length) diagnostics.push(`${filePath}: unsupported tools: ${agent.invalidTools.join(", ")}`);
+      diagnostics.push(...agentConfigurationIssues(agent).map((issue) => `${filePath}: ${issue}`), ...(agent.warnings ?? []));
+    } catch (error) {
+      diagnostics.push(`${filePath}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  return diagnostics;
+}
+
 export function discoverAgents(options: {
   agentsDirectory: string;
   settingsPaths: string[];

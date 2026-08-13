@@ -19,8 +19,10 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type, type Static } from "typebox";
-import { agentConfigurationIssues, discoverAgents, type AgentConfig } from "./agents.ts";
+import { agentConfigurationIssues, diagnoseAgentDefinitions, discoverAgents, type AgentConfig } from "./agents.ts";
 import { ensureDefaultAgents } from "./agent-files.ts";
+import { buildDoctorReport } from "./doctor-report.ts";
+import { SubagentsDoctor } from "./doctor.ts";
 import { SubagentManager } from "./manager.ts";
 import { acquireMutationLock, finishRunReport, startRunReport } from "./reports.ts";
 import { captureRunMessage, trackRun, type ActiveRun } from "./run-stream.ts";
@@ -108,6 +110,26 @@ function applyChildRuntimeSettings(settings: SettingsManager): void {
   });
 }
 
+async function runtimeInventory(cwd: string, ctx: ExtensionContext) {
+  const loader = new DefaultResourceLoader({
+    cwd,
+    agentDir: getAgentDir(),
+    settingsManager: childSettings(cwd, ctx),
+    additionalExtensionPaths: [GUARDRAILS_EXTENSION],
+    noExtensions: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    noContextFiles: true,
+  });
+  await loader.reload();
+  return { skills: loader.getSkills(), guardrailErrors: loader.getExtensions().errors };
+}
+
+function formatSkillDiagnostic(diagnostic: { message: string; path?: string; collision?: { winnerPath: string; loserPath: string } }): string {
+  if (diagnostic.collision) return `${diagnostic.message} (winner: ${diagnostic.collision.winnerPath}; ignored: ${diagnostic.collision.loserPath})`;
+  return `${diagnostic.message}${diagnostic.path ? ` (${diagnostic.path})` : ""}`;
+}
+
 function textFromLastAssistantMessage(messages: readonly unknown[]): string {
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index] as {
@@ -125,6 +147,11 @@ function textFromLastAssistantMessage(messages: readonly unknown[]): string {
     if (text) return text;
   }
   throw new Error("Subagent returned no text response");
+}
+
+function resolveModelAvailable(modelName: string, ctx: ExtensionContext): boolean {
+  const separator = modelName.indexOf("/");
+  return separator > 0 && Boolean(ctx.modelRegistry.find(modelName.slice(0, separator), modelName.slice(separator + 1)));
 }
 
 function resolveModel(modelName: string | undefined, agent: AgentConfig, ctx: ExtensionContext) {
@@ -309,6 +336,54 @@ export default function subagents(pi: ExtensionAPI) {
       } finally {
         refreshStatus = undefined;
       }
+    },
+  });
+
+  pi.registerCommand("subagents-doctor", {
+    description: "Diagnose subagent definitions, models, skills, and runtime dependencies",
+    handler: async (_args: string, ctx: ExtensionCommandContext) => {
+      await ctx.waitForIdle();
+      const agents = agentsFor(ctx);
+      const inventory = await runtimeInventory(ctx.cwd, ctx);
+      const availableSkills = new Set(inventory.skills.skills.map((skill) => skill.name));
+      const report = buildDoctorReport({
+        agents: agents.map((agent) => {
+          const issues = [
+            ...(agent.invalidTools?.length ? [`unsupported tools: ${agent.invalidTools.join(", ")}`] : []),
+            ...agentConfigurationIssues(agent),
+            ...(agent.warnings ?? []),
+            ...(agent.model && !resolveModelAvailable(agent.model, ctx) ? [`model unavailable: ${agent.model}`] : []),
+            ...(!agent.model && !ctx.model ? ["parent model unavailable"] : []),
+            ...(agent.fallbackModels ?? []).filter((model) => !resolveModelAvailable(model, ctx)).map((model) => `fallback unavailable: ${model}`),
+            ...(agent.skills ?? []).filter((skill) => !availableSkills.has(skill)).map((skill) => `skill missing: ${skill}`),
+          ];
+          return {
+            name: agent.name,
+            filePath: agent.filePath,
+            model: agent.model ?? (ctx.model ? `${ctx.model.provider}/${ctx.model.id} (parent)` : "parent unavailable"),
+            fallbackModels: agent.fallbackModels,
+            tools: agent.tools,
+            skills: agent.skills,
+            issues,
+          };
+        }),
+        definitionDiagnostics: diagnoseAgentDefinitions(AGENTS_DIRECTORY),
+        skillDiagnostics: inventory.skills.diagnostics.map(formatSkillDiagnostic),
+        availableSkills: [...availableSkills].sort(),
+        guardrailsAvailable: existsSync(GUARDRAILS_EXTENSION) && inventory.guardrailErrors.length === 0,
+        guardrailDiagnostics: inventory.guardrailErrors.map(({ path, error }) => `${error} (${path})`),
+        agentsDirectory: AGENTS_DIRECTORY,
+        reportsDirectory: REPORTS_DIRECTORY,
+        activeRuns: [...runs.values()].filter(({ report }) => report.status === "running").length,
+      });
+      if (ctx.mode !== "tui") {
+        ctx.ui.notify(report, "info");
+        return;
+      }
+      await ctx.ui.custom<void>((tui, theme, _keybindings, done) => new SubagentsDoctor(tui, theme, report, done), {
+        overlay: true,
+        overlayOptions: { anchor: "center", width: "100%", maxHeight: "100%" },
+      });
     },
   });
 

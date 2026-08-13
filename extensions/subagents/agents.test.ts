@@ -14,9 +14,10 @@ import {
   restoreDefaultAgents,
   withEffectiveSettings,
 } from "./agent-files.ts";
-import { acquireMutationLock, finishRunReport, pruneRunReports, startRunReport } from "./reports.ts";
+import { acquireMutationLock, finishRunReport, pauseRunReport, pruneRunReports, resumeRunReport, startRunReport } from "./reports.ts";
 import { buildDoctorReport } from "./doctor-report.ts";
 import { captureRunMessage, streamJump, trackRun, type RunMessage } from "./run-stream.ts";
+import { formatParentRequest, formatResumePrompt } from "./supervision.ts";
 
 const definition = (name: string, description: string) => `---\nname: ${name}\ndescription: ${description}\ntools: read, grep\nthinking: low\n---\nBe useful.`;
 
@@ -228,6 +229,23 @@ test("persists a recoverable run report", () => {
   assert.match(content, /## Report\n\nLooks good\./);
 });
 
+test("persists paused questions and resumes the same report", () => {
+  const directory = mkdtempSync(join(tmpdir(), "lofi-subagent-paused-report-"));
+  const report = startRunReport(directory, "worker", "Implement this", "/project");
+  pauseRunReport(report, "openai/test", ["Which behavior should win?"]);
+  assert.match(readFileSync(report.filePath, "utf8"), /Status: waiting[\s\S]*Which behavior should win/);
+  resumeRunReport(report);
+  const resumed = readFileSync(report.filePath, "utf8");
+  assert.match(resumed, /Status: running/);
+  assert.doesNotMatch(resumed, /Pending questions/);
+});
+
+test("formats parent requests and resume prompts", () => {
+  const request = { questions: ["Choose A or B?"], context: "Both pass validation." };
+  assert.match(formatParentRequest("worker", "run-1", request), /ask_user_question[\s\S]*action=resume[\s\S]*run-1/);
+  assert.match(formatResumePrompt(request, "Choose B."), /Choose A or B[\s\S]*Choose B[\s\S]*Continue the original task/);
+});
+
 test("prunes old completed reports without removing active reports", () => {
   const directory = mkdtempSync(join(tmpdir(), "lofi-subagent-report-retention-"));
   for (let index = 0; index < 3; index++) {
@@ -235,11 +253,14 @@ test("prunes old completed reports without removing active reports", () => {
     finishRunReport(report, { status: "completed", output: "Done" });
   }
   const active = startRunReport(directory, "reviewer", "Still running", "/project");
+  const waiting = startRunReport(directory, "worker", "Waiting", "/project");
+  pauseRunReport(waiting, "openai/test", ["Continue?"]);
 
   pruneRunReports(directory, 2);
 
   assert.equal(existsSync(active.filePath), true);
-  assert.equal(readdirSync(directory).filter((name) => name.endsWith(".md")).length, 3);
+  assert.equal(existsSync(waiting.filePath), true);
+  assert.equal(readdirSync(directory).filter((name) => name.endsWith(".md")).length, 4);
 });
 
 test("locks all mutation-capable runs per working directory", () => {

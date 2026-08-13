@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
-export type RunStatus = "running" | "completed" | "failed" | "aborted";
+export type RunStatus = "running" | "waiting" | "completed" | "failed" | "aborted";
 
 export interface RunReport {
   id: string;
@@ -14,6 +14,7 @@ export interface RunReport {
   startedAt: string;
   finishedAt?: string;
   model?: string;
+  questions?: string[];
   output?: string;
   error?: string;
   filePath: string;
@@ -112,6 +113,7 @@ export function saveRunReport(report: RunReport): void {
     "",
     report.task,
     "",
+    ...(report.questions?.length ? ["## Pending questions", "", ...report.questions.map((question, index) => `${index + 1}. ${question}`), ""] : []),
     ...(report.output !== undefined ? ["## Report", "", report.output, ""] : []),
     ...(report.error !== undefined ? ["## Error", "", report.error, ""] : []),
   ];
@@ -120,7 +122,19 @@ export function saveRunReport(report: RunReport): void {
   renameSync(temporaryPath, report.filePath);
 }
 
+export function pauseRunReport(report: RunReport, model: string, questions: string[]): void {
+  Object.assign(report, { status: "waiting", model, questions });
+  saveRunReport(report);
+}
+
+export function resumeRunReport(report: RunReport): void {
+  report.status = "running";
+  delete report.questions;
+  saveRunReport(report);
+}
+
 export function finishRunReport(report: RunReport, update: Pick<RunReport, "status"> & Partial<Pick<RunReport, "model" | "output" | "error">>): void {
+  delete report.questions;
   Object.assign(report, update, { finishedAt: new Date().toISOString() });
   saveRunReport(report);
   pruneRunReports(dirname(report.filePath));
@@ -130,6 +144,6 @@ export function pruneRunReports(directory: string, keep = 200): void {
   const completed = readdirSync(directory)
     .filter((name) => name.endsWith(".md"))
     .sort()
-    .filter((name) => readFileSync(join(directory, name), "utf8").split(/\r?\n/, 6)[4] !== "- Status: running");
+    .filter((name) => !["- Status: running", "- Status: waiting"].includes(readFileSync(join(directory, name), "utf8").split(/\r?\n/, 6)[4] ?? ""));
   for (const name of completed.slice(0, Math.max(0, completed.length - keep))) unlinkSync(join(directory, name));
 }

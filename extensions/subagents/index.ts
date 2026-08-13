@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  AgentSession,
   CONFIG_DIR_NAME,
   createAgentSession,
   DefaultResourceLoader,
@@ -21,12 +22,14 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { Type, type Static } from "typebox";
 import { agentConfigurationIssues, diagnoseAgentDefinitions, discoverAgents, FORBIDDEN_CHILD_SKILL, type AgentConfig } from "./agents.ts";
 import { ensureDefaultAgents } from "./agent-files.ts";
+import { createContactParentTool } from "./contact-parent.ts";
 import { buildDoctorReport } from "./doctor-report.ts";
 import { SubagentsDoctor } from "./doctor.ts";
 import { SubagentManager } from "./manager.ts";
-import { acquireMutationLock, finishRunReport, startRunReport } from "./reports.ts";
+import { acquireMutationLock, finishRunReport, pauseRunReport, resumeRunReport, startRunReport } from "./reports.ts";
 import { captureRunMessage, trackRun, type ActiveRun } from "./run-stream.ts";
 import { SubagentStatus } from "./status.ts";
+import { formatParentRequest, formatResumePrompt, type ParentRequest } from "./supervision.ts";
 
 const DEFAULT_AGENTS = fileURLToPath(new URL("./default-agents", import.meta.url));
 const AGENTS_DIRECTORY = join(homedir(), ".config", "agents", "pi");
@@ -35,7 +38,8 @@ const GUARDRAILS_EXTENSION = join(getAgentDir(), "npm", "node_modules", "@aliou"
 const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
 const SUBAGENT_BOUNDARIES = `# Boundaries
 Return only the requested deliverable and blockers, as concisely as correctness allows. Do one pass, stop when the task is answered, and do not expand scope, propose follow-up work, or continue searching for additional issues unless the task explicitly requires it.
-Treat pre-existing worktree and index changes as human-owned. Preserve them: never stash, reset, restore, clean, discard, or overwrite unrelated changes. Stop and report a blocker when overlap prevents safe work.`;
+Treat pre-existing worktree and index changes as human-owned. Preserve them: never stash, reset, restore, clean, discard, or overwrite unrelated changes. Stop and report a blocker when overlap prevents safe work.
+When a required decision cannot be resolved from the task or repository, call contact_parent alone with 1-4 specific questions. Wait for the parent response, then continue the same task.`;
 const gitInspectSchema = Type.Object({
   command: StringEnum(["git diff", "git diff --cached", "git status --short", "git diff <base>...HEAD", "git log <base>..HEAD --oneline"] as const),
   base: Type.Optional(Type.String({ description: "Base revision for commands containing <base>" })),
@@ -63,15 +67,30 @@ function validateKetchArgs(command: KetchInput["command"], args: string[]): void
   }
 }
 
-interface AgentResult {
+interface CompletedAgentResult {
+  status: "completed";
   output: string;
   model: string;
+}
+
+interface WaitingAgentResult {
+  status: "waiting";
+  model: string;
+  request: ParentRequest;
+  continuation: AgentContinuation;
+}
+
+type AgentResult = CompletedAgentResult | WaitingAgentResult;
+
+interface AgentContinuation {
+  resume(answer: string, signal: AbortSignal): Promise<AgentResult>;
+  dispose(): void;
 }
 
 function pruneFinishedRuns(runs: Map<string, ActiveRun>, keep = 100): void {
   for (const [id, run] of runs) {
     if (runs.size <= keep) return;
-    if (run.report.status !== "running") runs.delete(id);
+    if (run.report.status !== "running" && run.report.status !== "waiting") runs.delete(id);
   }
 }
 
@@ -154,6 +173,22 @@ function resolveModelAvailable(modelName: string, ctx: ExtensionContext): boolea
   return separator > 0 && Boolean(ctx.modelRegistry.find(modelName.slice(0, separator), modelName.slice(separator + 1)));
 }
 
+async function promptChild(session: AgentSession, prompt: string, signal: AbortSignal, timeoutMs: number): Promise<void> {
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  const turnSignal = AbortSignal.any([signal, timeoutSignal]);
+  const abort = () => void session.abort();
+  turnSignal.addEventListener("abort", abort, { once: true });
+  try {
+    turnSignal.throwIfAborted();
+    await session.prompt(prompt);
+  } catch (error) {
+    if (timeoutSignal.aborted && !signal.aborted) throw new Error(`Subagent attempt timed out after ${timeoutMs}ms`);
+    throw error;
+  } finally {
+    turnSignal.removeEventListener("abort", abort);
+  }
+}
+
 function resolveModel(modelName: string | undefined, agent: AgentConfig, ctx: ExtensionContext) {
   if (!modelName) {
     if (!ctx.model) throw new Error("No model is active");
@@ -208,7 +243,10 @@ async function runAttempt(agent: AgentConfig, task: string, cwd: string, modelNa
   const missingSkills = [...selectedSkills].filter((skill) => !loadedSkills.has(skill));
   if (missingSkills.length) throw new Error(`Skills not found for ${agent.name}: ${missingSkills.join(", ")}`);
 
-  const customTools: ToolDefinition[] = [];
+  let pendingRequest: ParentRequest | undefined;
+  const customTools: ToolDefinition[] = [createContactParentTool((request) => {
+    pendingRequest = request;
+  })];
   if (agent.tools.includes("git_inspect")) customTools.push({
     name: "git_inspect",
     label: "Read-only Git",
@@ -249,30 +287,51 @@ async function runAttempt(agent: AgentConfig, task: string, cwd: string, modelNa
     model,
     modelRuntime,
     thinkingLevel: agent.thinking,
-    tools: agent.tools,
+    tools: [...agent.tools, "contact_parent"],
     customTools,
     resourceLoader,
     sessionManager: SessionManager.inMemory(cwd),
     settingsManager,
   });
-  const abort = () => void session.abort();
   const unsubscribe = onEvent ? session.subscribe(onEvent) : undefined;
-  runSignal.addEventListener("abort", abort, { once: true });
-
-  try {
-    runSignal.throwIfAborted();
-    await session.prompt(task);
-    return {
-      output: textFromLastAssistantMessage(session.messages),
-      model: `${model.provider}/${model.id}`,
-    };
-  } catch (error) {
-    if (timeoutSignal.aborted && !signal.aborted) throw new Error(`Subagent attempt timed out after ${timeoutMs}ms`);
-    throw error;
-  } finally {
-    runSignal.removeEventListener("abort", abort);
+  const modelId = `${model.provider}/${model.id}`;
+  let disposed = false;
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true;
     unsubscribe?.();
     session.dispose();
+  };
+  const continuation: AgentContinuation = {
+    async resume(answer, resumeSignal) {
+      const request = pendingRequest;
+      if (!request) throw new Error("Subagent has no pending parent request");
+      pendingRequest = undefined;
+      try {
+        await promptChild(session, formatResumePrompt(request, answer), resumeSignal, agent.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+        const nextRequest = pendingRequest as ParentRequest | undefined;
+        if (nextRequest) return { status: "waiting", model: modelId, request: nextRequest, continuation };
+        const result: CompletedAgentResult = { status: "completed", output: textFromLastAssistantMessage(session.messages), model: modelId };
+        dispose();
+        return result;
+      } catch (error) {
+        dispose();
+        throw error;
+      }
+    },
+    dispose,
+  };
+
+  try {
+    await promptChild(session, task, signal, timeoutMs);
+    const request = pendingRequest as ParentRequest | undefined;
+    if (request) return { status: "waiting", model: modelId, request, continuation };
+    const result: CompletedAgentResult = { status: "completed", output: textFromLastAssistantMessage(session.messages), model: modelId };
+    dispose();
+    return result;
+  } catch (error) {
+    dispose();
+    throw error;
   }
 }
 
@@ -302,22 +361,64 @@ async function runAgent(agent: AgentConfig, task: string, cwd: string, signal: A
 export default function subagents(pi: ExtensionAPI) {
   ensureDefaultAgents(DEFAULT_AGENTS, AGENTS_DIRECTORY);
   const runs = new Map<string, ActiveRun>();
+  const continuations = new Map<string, { continuation: AgentContinuation; request: ParentRequest }>();
+  const releases = new Map<string, () => void>();
   let refreshStatus: (() => void) | undefined;
   let shuttingDown = false;
+
+  const cleanupRun = (runId: string) => {
+    continuations.get(runId)?.continuation.dispose();
+    continuations.delete(runId);
+    releases.get(runId)?.();
+    releases.delete(runId);
+  };
+
+  const settleRun = (run: ActiveRun, result: AgentResult) => {
+    if (result.status === "waiting") {
+      continuations.set(run.report.id, { continuation: result.continuation, request: result.request });
+      pauseRunReport(run.report, result.model, result.request.questions);
+    } else {
+      finishRunReport(run.report, { status: "completed", model: result.model, output: result.output });
+      cleanupRun(run.report.id);
+    }
+    refreshStatus?.();
+    return result;
+  };
+
+  const executeRun = async (run: ActiveRun, runSignal: AbortSignal, operation: () => Promise<AgentResult>) => {
+    try {
+      const result = await operation();
+      runSignal.throwIfAborted();
+      return settleRun(run, result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      finishRunReport(run.report, { status: runSignal.aborted ? "aborted" : "failed", error: message });
+      cleanupRun(run.report.id);
+      refreshStatus?.();
+      throw error;
+    } finally {
+      pruneFinishedRuns(runs);
+    }
+  };
 
   pi.on("session_shutdown", async () => {
     shuttingDown = true;
     for (const run of runs.values()) {
-      if (run.report.status === "running") run.controller.abort();
+      if (run.report.status === "running" || run.report.status === "waiting") run.controller.abort();
+      if (run.report.status === "waiting") {
+        cleanupRun(run.report.id);
+        finishRunReport(run.report, { status: "aborted", error: "Parent session ended while waiting for input" });
+      }
     }
     await Promise.allSettled([...runs.values()].map(({ promise }) => promise));
+    for (const run of runs.values()) cleanupRun(run.report.id);
   });
 
   pi.registerCommand("subagents-status", {
     description: "View live and completed subagent message streams",
     handler: async (_args: string, ctx: ExtensionCommandContext) => {
       const currentRuns = [...runs.values()];
-      if (!currentRuns.some(({ report }) => report.status === "running")) {
+      if (!currentRuns.some(({ report }) => report.status === "running" || report.status === "waiting")) {
         ctx.ui.notify("No subagents are running", "info");
         return;
       }
@@ -374,7 +475,7 @@ export default function subagents(pi: ExtensionAPI) {
         guardrailDiagnostics: inventory.guardrailErrors.map(({ path, error }) => `${error} (${path})`),
         agentsDirectory: AGENTS_DIRECTORY,
         reportsDirectory: REPORTS_DIRECTORY,
-        activeRuns: [...runs.values()].filter(({ report }) => report.status === "running").length,
+        activeRuns: [...runs.values()].filter(({ report }) => report.status === "running" || report.status === "waiting").length,
       });
       if (ctx.mode !== "tui") {
         ctx.ui.notify(report, "info");
@@ -418,15 +519,17 @@ export default function subagents(pi: ExtensionAPI) {
     promptGuidelines: [
       "Use subagent with action=list before choosing an unfamiliar agent.",
       "Use subagent with action=status to inspect asynchronous runs and action=stop to abort one.",
+      "When a subagent pauses for parent input, answer from established context or use ask_user_question, then call subagent action=resume with the same runId and the answer.",
       "Use separate subagent calls for independent parallel tasks; mutation-capable subagents are limited to one per Git worktree.",
       "Run each requested subagent at most once. Do not automatically rerun it or dispatch follow-up subagents unless the current user explicitly asks.",
     ],
     parameters: Type.Object({
-      action: StringEnum(["list", "run", "status", "stop"] as const),
+      action: StringEnum(["list", "run", "resume", "status", "stop"] as const),
       agent: Type.Optional(Type.String({ description: "Agent name for action=run" })),
       task: Type.Optional(Type.String({ description: "Self-contained task for action=run" })),
       async: Type.Optional(Type.Boolean({ description: "Return immediately and run in the background" })),
-      runId: Type.Optional(Type.String({ description: "Run ID for action=status or action=stop" })),
+      runId: Type.Optional(Type.String({ description: "Run ID for action=resume, status, or stop" })),
+      answer: Type.Optional(Type.String({ description: "Parent or user answers for action=resume" })),
     }),
     async execute(_id, params, signal, onUpdate, ctx) {
       const agents = agentsFor(ctx);
@@ -448,19 +551,43 @@ export default function subagents(pi: ExtensionAPI) {
         if (params.runId && !selected.length) throw new Error(`Unknown run '${params.runId}'`);
         return {
           content: [{ type: "text", text: selected.map(({ report }) =>
-            `${report.id} — ${report.agent}: ${report.status}; report=${report.filePath}`
+            `${report.id} — ${report.agent}: ${report.status}; report=${report.filePath}${report.questions?.length ? `\n${report.questions.map((question, index) => `  ${index + 1}. ${question}`).join("\n")}` : ""}`
           ).join("\n") || "No runs started in this Pi process" }],
           details: { runs: selected.map(({ report }) => report) },
         };
+      }
+
+      if (params.action === "resume") {
+        if (!params.runId || !params.answer?.trim()) throw new Error("action=resume requires runId and answer");
+        const run = runs.get(params.runId);
+        const pending = continuations.get(params.runId);
+        if (!run) throw new Error(`Unknown run '${params.runId}'`);
+        if (run.report.status !== "waiting" || !pending) throw new Error(`Run ${params.runId} is not waiting for input`);
+        continuations.delete(params.runId);
+        resumeRunReport(run.report);
+        const resumeSignal = AbortSignal.any([signal ?? new AbortController().signal, run.controller.signal]);
+        const execution = executeRun(run, resumeSignal, () => pending.continuation.resume(params.answer!, resumeSignal));
+        run.promise = execution.then(() => undefined, () => undefined);
+        const result = await execution;
+        if (result.status === "waiting") {
+          return { content: [{ type: "text", text: formatParentRequest(run.report.agent, run.report.id, result.request) }], details: { run: run.report } };
+        }
+        const truncated = truncateHead(result.output);
+        return { content: [{ type: "text", text: `${truncated.content}\n\n[Full report: ${run.report.filePath}]` }], details: { agent: run.report.agent, model: result.model, report: run.report.filePath } };
       }
 
       if (params.action === "stop") {
         if (!params.runId) throw new Error("action=stop requires runId");
         const run = runs.get(params.runId);
         if (!run) throw new Error(`Unknown run '${params.runId}'`);
-        if (run.report.status !== "running") return { content: [{ type: "text", text: `Run ${params.runId} is already ${run.report.status}` }] };
+        if (run.report.status !== "running" && run.report.status !== "waiting") return { content: [{ type: "text", text: `Run ${params.runId} is already ${run.report.status}` }] };
         run.controller.abort();
-        await run.promise;
+        if (run.report.status === "waiting") {
+          cleanupRun(params.runId);
+          finishRunReport(run.report, { status: "aborted", error: "Stopped while waiting for parent input" });
+        } else {
+          await run.promise;
+        }
         return { content: [{ type: "text", text: `Stopped ${params.runId}; report=${run.report.filePath}` }] };
       }
 
@@ -478,31 +605,23 @@ export default function subagents(pi: ExtensionAPI) {
         throw error;
       }
       const activeRun = trackRun(runs, report, signal, params.async === true);
+      if (releaseLock) releases.set(report.id, releaseLock);
       refreshStatus?.();
-      const execute = async () => {
-        try {
-          const result = await runAgent(agent, params.task!, ctx.cwd, activeRun.signal, ctx, pi, (event) => {
-            if (captureRunMessage(activeRun.messages, event)) refreshStatus?.();
-          });
-          activeRun.signal.throwIfAborted();
-          finishRunReport(report, { status: "completed", model: result.model, output: result.output });
-          refreshStatus?.();
-          return result;
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          finishRunReport(report, { status: activeRun.signal.aborted ? "aborted" : "failed", error: message });
-          refreshStatus?.();
-          throw error;
-        } finally {
-          releaseLock?.();
-          pruneFinishedRuns(runs);
-        }
-      };
+      const execute = () => executeRun(activeRun, activeRun.signal, () => runAgent(agent, params.task!, ctx.cwd, activeRun.signal, ctx, pi, (event) => {
+        if (captureRunMessage(activeRun.messages, event)) refreshStatus?.();
+      }));
 
       if (params.async) {
         activeRun.promise = execute()
-          .then(() => {
-            if (!shuttingDown) ctx.ui.notify(`${agent.name} completed: ${report.filePath}`, "info");
+          .then((result) => {
+            if (shuttingDown) return;
+            if (result.status === "waiting") {
+              const message = formatParentRequest(agent.name, report.id, result.request);
+              ctx.ui.notify(`${agent.name} needs parent input`, "warning");
+              pi.sendMessage({ customType: "subagent-parent-request", content: message, display: true }, { deliverAs: "followUp", triggerTurn: true });
+            } else {
+              ctx.ui.notify(`${agent.name} completed: ${report.filePath}`, "info");
+            }
           })
           .catch((error) => {
             if (!shuttingDown) ctx.ui.notify(`${agent.name} ${report.status}: ${error instanceof Error ? error.message : String(error)}`, "error");
@@ -521,6 +640,12 @@ export default function subagents(pi: ExtensionAPI) {
       activeRun.promise = execution.then(() => undefined, () => undefined);
       try {
         const result = await execution;
+        if (result.status === "waiting") {
+          return {
+            content: [{ type: "text", text: formatParentRequest(agent.name, report.id, result.request) }],
+            details: { agent: agent.name, model: result.model, report: report.filePath, run: report },
+          };
+        }
         const truncated = truncateHead(result.output);
         return {
           content: [{

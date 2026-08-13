@@ -35,6 +35,13 @@
         "model": "claude-bridge/claude-fable-5",
         "thinking": "xhigh"
       },
+      "reviewer": {
+        "model": "claude-bridge/claude-fable-5",
+        "fallbackModels": [
+          "openai-codex/gpt-5.6-sol"
+        ],
+        "thinking": "high"
+      },
       "worker": {
         "skills": [
           "project-conventions",

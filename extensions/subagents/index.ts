@@ -32,7 +32,7 @@ const REPORTS_DIRECTORY = join(AGENTS_DIRECTORY, "reports");
 const GUARDRAILS_EXTENSION = join(getAgentDir(), "npm", "node_modules", "@aliou", "pi-guardrails", "extensions", "guardrails", "index.ts");
 const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
 const SUBAGENT_BOUNDARIES = `# Boundaries
-Return only the requested deliverable and blockers, as concisely as correctness allows. Do one pass, stop when the task is answered, and do not expand scope, propose follow-up work, or continue searching for additional issues unless the task explicitly requires it.`;
+Return only the requested deliverable and blockers, as concisely as correctness allows. Do one pass, stop when the task is answered, and do not expand scope, propose follow-up work, or continue searching for additional issues unless the task explicitly requires it.\nTreat pre-existing worktree and index changes as human-owned. Preserve them: never stash, reset, restore, clean, discard, or overwrite unrelated changes. Stop and report a blocker when overlap prevents safe work.`;
 const gitInspectSchema = Type.Object({
   command: StringEnum(["git diff", "git diff --cached", "git status --short", "git diff <base>...HEAD", "git log <base>..HEAD --oneline"] as const),
   base: Type.Optional(Type.String({ description: "Base revision for commands containing <base>" })),

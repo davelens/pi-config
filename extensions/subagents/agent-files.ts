@@ -15,11 +15,13 @@ import {
 import { dirname, join } from "node:path";
 
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
+const DEFAULTS_V2_MARKER = ".defaults-v2";
 
 export function ensureDefaultAgents(defaultsDirectory: string, agentsDirectory: string): void {
   if (existsSync(agentsDirectory)) {
     migrateLegacyReadOnlyAgents(defaultsDirectory, agentsDirectory);
     migrateResearcherSafety(defaultsDirectory, agentsDirectory);
+    seedV2Defaults(defaultsDirectory, agentsDirectory);
     return;
   }
   mkdirSync(dirname(agentsDirectory), { recursive: true });
@@ -31,6 +33,7 @@ export function ensureDefaultAgents(defaultsDirectory: string, agentsDirectory: 
       }
     }
     renameSync(temporaryDirectory, agentsDirectory);
+    writeFileSync(join(agentsDirectory, DEFAULTS_V2_MARKER), "");
   } finally {
     rmSync(temporaryDirectory, { recursive: true, force: true });
   }
@@ -46,6 +49,7 @@ export function restoreDefaultAgents(defaultsDirectory: string, agentsDirectory:
       copyFileSync(join(defaultsDirectory, entry.name), join(agentsDirectory, entry.name));
     }
   }
+  writeFileSync(join(agentsDirectory, DEFAULTS_V2_MARKER), "");
 }
 
 export function agentDefinitionParts(content: string): { frontmatter: string; body: string } {
@@ -119,6 +123,15 @@ export function renameAgentDefinition(filePath: string, name: string): string {
     throw error;
   }
   return target;
+}
+
+function seedV2Defaults(defaultsDirectory: string, agentsDirectory: string): void {
+  const marker = join(agentsDirectory, DEFAULTS_V2_MARKER);
+  if (existsSync(marker)) return;
+  const source = join(defaultsDirectory, "diff-summarizer.md");
+  const target = join(agentsDirectory, "diff-summarizer.md");
+  if (existsSync(source) && !existsSync(target)) copyFileSync(source, target);
+  writeFileSync(marker, "");
 }
 
 function migrateResearcherSafety(defaultsDirectory: string, agentsDirectory: string): void {

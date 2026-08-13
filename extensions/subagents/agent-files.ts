@@ -21,6 +21,7 @@ export function ensureDefaultAgents(defaultsDirectory: string, agentsDirectory: 
   if (existsSync(agentsDirectory)) {
     migrateLegacyReadOnlyAgents(defaultsDirectory, agentsDirectory);
     migrateResearcherSafety(defaultsDirectory, agentsDirectory);
+    migrateWorkerSkills(defaultsDirectory, agentsDirectory);
     seedV2Defaults(defaultsDirectory, agentsDirectory);
     return;
   }
@@ -132,6 +133,14 @@ function seedV2Defaults(defaultsDirectory: string, agentsDirectory: string): voi
   const target = join(agentsDirectory, "diff-summarizer.md");
   if (existsSync(source) && !existsSync(target)) copyFileSync(source, target);
   writeFileSync(marker, "");
+}
+
+function migrateWorkerSkills(defaultsDirectory: string, agentsDirectory: string): void {
+  const defaultPath = join(defaultsDirectory, "worker.md");
+  const managedPath = join(agentsDirectory, "worker.md");
+  if (!existsSync(defaultPath) || !existsSync(managedPath) || lstatSync(managedPath).isSymbolicLink()) return;
+  const current = readFileSync(defaultPath, "utf8");
+  if (readFileSync(managedPath, "utf8") === current.replace(/^skills:.*\r?\n/m, "")) atomicWrite(managedPath, current);
 }
 
 function migrateResearcherSafety(defaultsDirectory: string, agentsDirectory: string): void {

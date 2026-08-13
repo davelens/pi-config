@@ -76,6 +76,7 @@ test("rejects malformed fallbacks and skills without read", () => {
   assert.equal(agent.fallbackModels, undefined);
   assert.match(agent.warnings?.join("\n") ?? "", /Fallback models override must be an array/);
   assert.deepEqual(agentConfigurationIssues(agent), ["configured skills require the read tool"]);
+  assert.deepEqual(agentConfigurationIssues({ skills: ["pi-subagents"], tools: ["read"] }), ["pi-subagents cannot be used by subagents"]);
   const other = agents.find(({ name }) => name === "other")!;
   assert.equal(other.model, undefined);
   assert.deepEqual(other.tools, ["read", "grep"]);
@@ -143,6 +144,21 @@ test("seeds only a missing directory and restores defaults", () => {
   assert.equal(existsSync(join(agents, "scout.md")), true);
   assert.equal(existsSync(join(agents, "custom.md")), false);
   assert.equal(existsSync(join(agents, "reports", "saved.md")), true);
+});
+
+test("migrates worker skills into an unchanged managed definition", () => {
+  const root = mkdtempSync(join(tmpdir(), "lofi-subagent-worker-skills-"));
+  const defaults = join(root, "defaults");
+  const agents = join(root, "agents");
+  mkdirSync(defaults);
+  mkdirSync(agents);
+  const current = definition("worker", "default").replace("thinking: low", "skills: project-conventions, ponytail\nthinking: low");
+  writeFileSync(join(defaults, "worker.md"), current);
+  writeFileSync(join(agents, "worker.md"), current.replace("skills: project-conventions, ponytail\n", ""));
+
+  ensureDefaultAgents(defaults, agents);
+
+  assert.equal(readFileSync(join(agents, "worker.md"), "utf8"), current);
 });
 
 test("preserves symlinked researcher definitions during migration", () => {

@@ -19,7 +19,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type, type Static } from "typebox";
-import { agentConfigurationIssues, diagnoseAgentDefinitions, discoverAgents, type AgentConfig } from "./agents.ts";
+import { agentConfigurationIssues, diagnoseAgentDefinitions, discoverAgents, FORBIDDEN_CHILD_SKILL, type AgentConfig } from "./agents.ts";
 import { ensureDefaultAgents } from "./agent-files.ts";
 import { buildDoctorReport } from "./doctor-report.ts";
 import { SubagentsDoctor } from "./doctor.ts";
@@ -193,7 +193,7 @@ async function runAttempt(agent: AgentConfig, task: string, cwd: string, modelNa
     noThemes: true,
     skillsOverride: selectedSkills.size ? (base) => ({
       skills: base.skills
-        .filter((skill) => selectedSkills.has(skill.name))
+        .filter((skill) => skill.name !== FORBIDDEN_CHILD_SKILL && selectedSkills.has(skill.name))
         .map((skill) => ({ ...skill, disableModelInvocation: false })),
       diagnostics: base.diagnostics,
     }) : undefined,
@@ -345,7 +345,7 @@ export default function subagents(pi: ExtensionAPI) {
       await ctx.waitForIdle();
       const agents = agentsFor(ctx);
       const inventory = await runtimeInventory(ctx.cwd, ctx);
-      const availableSkills = new Set(inventory.skills.skills.map((skill) => skill.name));
+      const availableSkills = new Set(inventory.skills.skills.map((skill) => skill.name).filter((skill) => skill !== FORBIDDEN_CHILD_SKILL));
       const report = buildDoctorReport({
         agents: agents.map((agent) => {
           const issues = [

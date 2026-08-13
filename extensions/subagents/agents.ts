@@ -6,6 +6,7 @@ export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
 
 const SUPPORTED_TOOLS = new Set(["read", "grep", "find", "ls", "bash", "edit", "write", "git_inspect", "ketch"]);
 const MUTATION_TOOLS = new Set(["bash", "edit", "write"]);
+export const FORBIDDEN_CHILD_SKILL = "pi-subagents";
 
 export interface AgentConfig {
   name: string;
@@ -151,7 +152,10 @@ function applyOverrides(agents: Map<string, AgentConfig>, overrides: Record<stri
 }
 
 export function agentConfigurationIssues(agent: Pick<AgentConfig, "skills" | "tools">): string[] {
-  return agent.skills?.length && !agent.tools.includes("read") ? ["configured skills require the read tool"] : [];
+  return [
+    ...(agent.skills?.includes(FORBIDDEN_CHILD_SKILL) ? [`${FORBIDDEN_CHILD_SKILL} cannot be used by subagents`] : []),
+    ...(agent.skills?.length && !agent.tools.includes("read") ? ["configured skills require the read tool"] : []),
+  ];
 }
 
 export function diagnoseAgentDefinitions(directory: string): string[] {

@@ -12,6 +12,7 @@ import {
   SettingsManager,
   truncateHead,
   type AgentSessionEvent,
+  type ToolDefinition,
   type ExtensionAPI,
   type ExtensionCommandContext,
   type ExtensionContext,
@@ -28,14 +29,47 @@ import { SubagentStatus } from "./status.ts";
 const DEFAULT_AGENTS = fileURLToPath(new URL("./default-agents", import.meta.url));
 const AGENTS_DIRECTORY = join(homedir(), ".config", "agents", "pi");
 const REPORTS_DIRECTORY = join(AGENTS_DIRECTORY, "reports");
-const readOnlyBashSchema = Type.Object({
-  command: StringEnum(["git diff", "git diff --cached", "git status --short"] as const),
+const GUARDRAILS_EXTENSION = join(getAgentDir(), "npm", "node_modules", "@aliou", "pi-guardrails", "extensions", "guardrails", "index.ts");
+const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
+const SUBAGENT_BOUNDARIES = `# Boundaries
+Return only the requested deliverable and blockers, as concisely as correctness allows. Do one pass, stop when the task is answered, and do not expand scope, propose follow-up work, or continue searching for additional issues unless the task explicitly requires it.`;
+const gitInspectSchema = Type.Object({
+  command: StringEnum(["git diff", "git diff --cached", "git status --short", "git diff <base>...HEAD", "git log <base>..HEAD --oneline"] as const),
+  base: Type.Optional(Type.String({ description: "Base revision for commands containing <base>" })),
 });
-type ReadOnlyBashInput = Static<typeof readOnlyBashSchema>;
+type GitInspectInput = Static<typeof gitInspectSchema>;
+const ketchSchema = Type.Object({
+  command: StringEnum(["search", "scrape", "crawl", "code", "docs"] as const),
+  args: Type.Optional(Type.Array(Type.String(), { description: "Arguments passed directly to ketch without a shell" })),
+});
+type KetchInput = Static<typeof ketchSchema>;
+const KETCH_FLAGS: Record<KetchInput["command"], Set<string>> = {
+  search: new Set(["-b", "--backend", "-h", "--help", "-l", "--limit", "--max-chars", "--minimal", "--scrape", "--searxng-url", "--trim", "--json"]),
+  scrape: new Set(["--concurrency", "--force-browser", "-h", "--help", "--max-chars", "--no-cache", "--no-llms-txt", "--raw", "--select", "--trim", "--json"]),
+  crawl: new Set(["--allow", "--concurrency", "--deny", "--depth", "-h", "--help", "--no-cache", "--sitemap", "--json"]),
+  code: new Set(["-b", "--backend", "-h", "--help", "--lang", "-l", "--limit", "--minimal", "--regex", "--json"]),
+  docs: new Set(["-b", "--backend", "-h", "--help", "--library", "-l", "--limit", "--minimal", "--resolve", "--tokens", "--json"]),
+};
+
+function validateKetchArgs(command: KetchInput["command"], args: string[]): void {
+  if (command === "crawl" && args.includes("stop")) throw new Error("Stopping background crawls is not available to read-only subagents");
+  for (const arg of args) {
+    if (!arg.startsWith("-")) continue;
+    const flag = arg.split("=", 1)[0]!;
+    if (!KETCH_FLAGS[command].has(flag)) throw new Error(`Unsupported ketch ${command} flag: ${flag}`);
+  }
+}
 
 interface AgentResult {
   output: string;
   model: string;
+}
+
+function pruneFinishedRuns(runs: Map<string, ActiveRun>, keep = 100): void {
+  for (const [id, run] of runs) {
+    if (runs.size <= keep) return;
+    if (run.report.status !== "running") runs.delete(id);
+  }
 }
 
 function projectSettings(cwd: string): string | undefined {
@@ -54,7 +88,12 @@ function settingsFor(ctx: ExtensionContext): string[] {
 }
 
 function agentsFor(ctx: ExtensionContext): AgentConfig[] {
-  return discoverAgents({ agentsDirectory: AGENTS_DIRECTORY, settingsPaths: settingsFor(ctx) });
+  const settingsPaths = settingsFor(ctx);
+  return discoverAgents({
+    agentsDirectory: AGENTS_DIRECTORY,
+    settingsPaths,
+    projectSettingsPath: settingsPaths.length > 1 ? settingsPaths.at(-1) : undefined,
+  });
 }
 
 function textFromLastAssistantMessage(messages: readonly unknown[]): string {
@@ -89,12 +128,16 @@ function resolveModel(modelName: string | undefined, agent: AgentConfig, ctx: Ex
   return model;
 }
 
-async function runAttempt(agent: AgentConfig, task: string, cwd: string, modelName: string | undefined, signal: AbortSignal, ctx: ExtensionContext, pi: ExtensionAPI, onEvent?: (event: AgentSessionEvent) => void): Promise<AgentResult> {
+async function runAttempt(agent: AgentConfig, task: string, cwd: string, modelName: string | undefined, signal: AbortSignal, timeoutMs: number, ctx: ExtensionContext, pi: ExtensionAPI, onEvent?: (event: AgentSessionEvent) => void): Promise<AgentResult> {
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  const runSignal = AbortSignal.any([signal, timeoutSignal]);
   const model = resolveModel(modelName, agent, ctx);
-  const modelRuntime = await ModelRuntime.create({ refreshOnCreate: false, signal });
+  const modelRuntime = await ModelRuntime.create({ refreshOnCreate: false, signal: runSignal });
   const provider = ctx.modelRegistry.getProvider(model.provider);
   if (!provider) throw new Error(`Provider '${model.provider}' is unavailable`);
   modelRuntime.registerNativeProvider(provider);
+
+  if (!existsSync(GUARDRAILS_EXTENSION)) throw new Error(`Subagent guardrails are unavailable: ${GUARDRAILS_EXTENSION}`);
 
   const settingsManager = SettingsManager.inMemory({
     httpIdleTimeoutMs: 0,
@@ -104,57 +147,81 @@ async function runAttempt(agent: AgentConfig, task: string, cwd: string, modelNa
     cwd,
     agentDir: getAgentDir(),
     settingsManager,
+    additionalExtensionPaths: [GUARDRAILS_EXTENSION],
     noExtensions: true,
     noSkills: true,
     noPromptTemplates: true,
     noThemes: true,
-    systemPromptOverride: () => model.provider === "claude-bridge"
-      ? `${ctx.getSystemPrompt()}\n\n# Subagent role\n${agent.prompt}`
-      : agent.prompt,
+    systemPromptOverride: (base) => `${base ?? ""}\n\n# Subagent role\n${agent.prompt}\n\n${SUBAGENT_BOUNDARIES}`.trim(),
     appendSystemPromptOverride: () => [],
   });
   await resourceLoader.reload();
+  const extensionErrors = resourceLoader.getExtensions().errors;
+  if (extensionErrors.length) throw new Error(`Could not load subagent guardrails: ${extensionErrors.map(({ error }) => error).join("; ")}`);
 
-  const readOnlyBash = agent.tools.includes("git_inspect") ? [{
+  const customTools: ToolDefinition[] = [];
+  if (agent.tools.includes("git_inspect")) customTools.push({
     name: "git_inspect",
     label: "Read-only Git",
-    description: "Run one allowed read-only Git inspection command",
-    parameters: readOnlyBashSchema,
-    async execute(_id: string, params: ReadOnlyBashInput, toolSignal?: AbortSignal) {
+    description: "Run an allowed read-only Git diff, log, or status command",
+    parameters: gitInspectSchema,
+    async execute(_id: string, params: GitInspectInput, toolSignal?: AbortSignal) {
       const safeGit = ["--no-pager", "--no-optional-locks", "-c", "core.fsmonitor=false"];
-      const result = await pi.exec("git", params.command === "git status --short"
+      const needsBase = params.command.includes("<base>");
+      if (needsBase && (!params.base || params.base.startsWith("-"))) throw new Error("This git command requires a base revision that does not start with '-'");
+      const args = params.command === "git status --short"
         ? [...safeGit, "status", "--short"]
         : params.command === "git diff --cached"
           ? [...safeGit, "diff", "--cached", "--no-ext-diff", "--no-textconv"]
-          : [...safeGit, "diff", "--no-ext-diff", "--no-textconv"], { cwd, signal: toolSignal });
+          : params.command === "git diff <base>...HEAD"
+            ? [...safeGit, "diff", "--no-ext-diff", "--no-textconv", `${params.base}...HEAD`]
+            : params.command === "git log <base>..HEAD --oneline"
+              ? [...safeGit, "log", `${params.base}..HEAD`, "--oneline"]
+              : [...safeGit, "diff", "--no-ext-diff", "--no-textconv"];
+      const result = await pi.exec("git", args, { cwd, signal: toolSignal });
       if (result.code !== 0) throw new Error(result.stderr || `git exited with ${result.code}`);
       return { content: [{ type: "text" as const, text: result.stdout || "(no output)" }], details: {} };
     },
-  }] : [];
+  });
+  if (agent.tools.includes("ketch")) customTools.push({
+    name: "ketch",
+    label: "Ketch",
+    description: "Search or scrape the web, code, and library docs through ketch without shell access",
+    parameters: ketchSchema,
+    async execute(_id: string, params: KetchInput, toolSignal?: AbortSignal) {
+      validateKetchArgs(params.command, params.args ?? []);
+      const result = await pi.exec("ketch", [params.command, ...(params.args ?? [])], { cwd, signal: toolSignal });
+      if (result.code !== 0) throw new Error(result.stderr || `ketch exited with ${result.code}`);
+      return { content: [{ type: "text" as const, text: truncateHead(result.stdout || "(no output)").content }], details: {} };
+    },
+  });
   const { session } = await createAgentSession({
     cwd,
     model,
     modelRuntime,
     thinkingLevel: agent.thinking,
     tools: agent.tools,
-    customTools: readOnlyBash,
+    customTools,
     resourceLoader,
     sessionManager: SessionManager.inMemory(cwd),
     settingsManager,
   });
   const abort = () => void session.abort();
   const unsubscribe = onEvent ? session.subscribe(onEvent) : undefined;
-  signal.addEventListener("abort", abort, { once: true });
+  runSignal.addEventListener("abort", abort, { once: true });
 
   try {
-    signal.throwIfAborted();
+    runSignal.throwIfAborted();
     await session.prompt(task);
     return {
       output: textFromLastAssistantMessage(session.messages),
       model: `${model.provider}/${model.id}`,
     };
+  } catch (error) {
+    if (timeoutSignal.aborted && !signal.aborted) throw new Error(`Subagent attempt timed out after ${timeoutMs}ms`);
+    throw error;
   } finally {
-    signal.removeEventListener("abort", abort);
+    runSignal.removeEventListener("abort", abort);
     unsubscribe?.();
     session.dispose();
   }
@@ -163,11 +230,20 @@ async function runAttempt(agent: AgentConfig, task: string, cwd: string, modelNa
 async function runAgent(agent: AgentConfig, task: string, cwd: string, signal: AbortSignal, ctx: ExtensionContext, pi: ExtensionAPI, onEvent?: (event: AgentSessionEvent) => void): Promise<AgentResult> {
   const candidates = [...new Set([agent.model, ...(agent.fallbackModels ?? [])])];
   const errors: string[] = [];
+  const writes = agent.tools.some((tool) => tool === "bash" || tool === "edit" || tool === "write");
+  const timeoutMs = agent.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const deadline = Date.now() + timeoutMs;
   for (const candidate of candidates.length ? candidates : [undefined]) {
+    let toolExecuted = false;
     try {
-      return await runAttempt(agent, task, cwd, candidate, signal, ctx, pi, onEvent);
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) throw new Error(`Subagent timed out after ${timeoutMs}ms`);
+      return await runAttempt(agent, task, cwd, candidate, signal, remainingMs, ctx, pi, (event) => {
+        if (event.type === "tool_execution_start") toolExecuted = true;
+        onEvent?.(event);
+      });
     } catch (error) {
-      if (signal.aborted) throw error;
+      if (signal.aborted || (writes && toolExecuted)) throw error;
       errors.push(`${candidate ?? "parent model"}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
@@ -245,7 +321,8 @@ export default function subagents(pi: ExtensionAPI) {
     promptGuidelines: [
       "Use subagent with action=list before choosing an unfamiliar agent.",
       "Use subagent with action=status to inspect asynchronous runs and action=stop to abort one.",
-      "Use separate subagent calls for independent parallel tasks; asynchronous writers are limited to one per working directory.",
+      "Use separate subagent calls for independent parallel tasks; mutation-capable subagents are limited to one per Git worktree.",
+      "Run each requested subagent at most once. Do not automatically rerun it or dispatch follow-up subagents unless the current user explicitly asks.",
     ],
     parameters: Type.Object({
       action: StringEnum(["list", "run", "status", "stop"] as const),
@@ -262,7 +339,7 @@ export default function subagents(pi: ExtensionAPI) {
           content: [{
             type: "text",
             text: agents.map((agent) =>
-              `${agent.name} — ${agent.description}; model=${agent.model ?? "parent"}${agent.fallbackModels?.length ? `; fallbacks=${agent.fallbackModels.join(",")}` : ""}; tools=${agent.tools.join(",")}`
+              `${agent.name} — ${agent.description}; model=${agent.model ?? "parent"}${agent.fallbackModels?.length ? `; fallbacks=${agent.fallbackModels.join(",")}` : ""}; timeout=${agent.timeoutMs ?? DEFAULT_TIMEOUT_MS}ms; tools=${agent.tools.join(",")}${agent.invalidTools?.length ? `; INVALID TOOLS=${agent.invalidTools.join(",")}` : ""}${agent.warnings?.length ? `; warnings=${agent.warnings.join(" | ")}` : ""}`
             ).join("\n") || "No subagents found",
           }],
           details: { agents: agents.map(({ prompt: _prompt, ...agent }) => agent) },
@@ -293,11 +370,12 @@ export default function subagents(pi: ExtensionAPI) {
       if (!params.agent || !params.task) throw new Error("action=run requires agent and task");
       const agent = agents.find(({ name }) => name === params.agent);
       if (!agent) throw new Error(`Unknown subagent '${params.agent}'. Available: ${agents.map(({ name }) => name).join(", ")}`);
+      if (agent.invalidTools?.length) throw new Error(`${agent.name} has unsupported tools: ${agent.invalidTools.join(", ")}`);
       const writes = agent.tools.some((tool) => tool === "bash" || tool === "edit" || tool === "write");
       const report = startRunReport(REPORTS_DIRECTORY, agent.name, params.task, ctx.cwd);
       let releaseLock: (() => void) | undefined;
       try {
-        releaseLock = params.async && writes ? acquireMutationLock(REPORTS_DIRECTORY, ctx.cwd, report.id) : undefined;
+        releaseLock = writes ? acquireMutationLock(REPORTS_DIRECTORY, ctx.cwd, report.id) : undefined;
       } catch (error) {
         finishRunReport(report, { status: "failed", error: error instanceof Error ? error.message : String(error) });
         throw error;
@@ -320,6 +398,7 @@ export default function subagents(pi: ExtensionAPI) {
           throw error;
         } finally {
           releaseLock?.();
+          pruneFinishedRuns(runs);
         }
       };
 

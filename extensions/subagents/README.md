@@ -12,7 +12,7 @@ subagent({ action: "status" })
 subagent({ action: "stop", runId: "..." })
 ```
 
-Pi already executes sibling tool calls concurrently, so parallel foreground work is multiple `subagent` calls in one turn. Set `async: true` to return immediately while a child continues in-process. Async runs last until their task finishes or the current Pi session exits, reloads, or is replaced; shutdown aborts them gracefully. Only one mutation-capable async agent (one with `bash`, `edit`, or `write`) can run per working directory. Shipped read-only agents omit unrestricted `bash`, so they can run concurrently. The reviewer gets `git_inspect`, limited to `git diff`, `git diff --cached`, and `git status --short`; add full `bash` explicitly when broader shell inspection is worth taking the writer lock.
+Pi already executes sibling tool calls concurrently, so parallel foreground work is multiple `subagent` calls in one turn. Each requested agent runs once; follow-up or validation runs require an explicit user request. Every child is instructed to return only the requested deliverable and blockers, concisely, then stop. Set `async: true` to return immediately while a child continues in-process. Async runs last until their task finishes or the current Pi session exits, reloads, or is replaced; shutdown aborts them gracefully. Only one mutation-capable agent (one with `bash`, `edit`, or `write`) can run per Git worktree (or working directory outside Git), whether foreground or async. Shipped read-only agents omit unrestricted `bash`, so they can run concurrently. The reviewer gets `git_inspect`, limited to read-only diff, log, and status operations; the researcher gets a shell-free `ketch` tool with an allowlist of supported CLI flags. Every child loads the configured guardrails policy extension and has a 15-minute default wall-clock timeout.
 
 ## Manage agents
 
@@ -26,6 +26,7 @@ Run `/subagents` to open the two-pane manager:
 - `e` renames the selected agent and its Markdown file while the sidebar is focused.
 - `d` deletes the selected agent after a confirmation dialog.
 - `ctrl+shift+r` restores shipped defaults from the sidebar after a destructive confirmation.
+- `*` marks a managed definition that differs from its shipped default.
 - `esc` closes the manager.
 
 Run `/subagents-status` while at least one subagent is active to inspect every run started in the current Pi process, including foreground runs and completed siblings. The popup follows the latest message by default; use `j`/`k` to scroll, `{`/`}` to jump ten rows, `gg`/`G` to jump to the top/bottom, and `ctrl+n`/`ctrl+p` or the sidebar to switch runs. A single run uses the full panel without a sidebar. If nothing is running, Pi shows an inline message instead of opening the popup.
@@ -43,15 +44,16 @@ Override bundled or custom agents in global `settings.json`, or in a trusted pro
       "reviewer": {
         "model": "openai-codex/gpt-5.6-sol",
         "thinking": "high",
+        "timeoutMs": 600000,
         "fallbackModels": ["claude-bridge/claude-fable-5"],
-        "tools": ["read", "grep", "find", "ls", "bash"]
+        "tools": ["read", "grep", "find", "ls", "git_inspect"]
       }
     }
   }
 }
 ```
 
-Project settings override global settings. Supported overrides are `description`, `model`, `fallbackModels`, `thinking`, and `tools`. Set `model` to `null` to inherit the parent model. Overrides only configure an agent that has a Markdown definition; they do not define its prompt. `/subagents` renders these effective values in the file view without changing the Markdown file.
+Project settings override global settings. Supported overrides are `description`, `model`, `fallbackModels`, `thinking`, `timeoutMs`, and `tools`. Set `model` to `null` to inherit the parent model. A project override cannot grant `bash`, `edit`, or `write` to an agent whose effective global definition lacks that tool. Unsupported tool names are reported and block the run instead of being silently ignored. Overrides only configure an agent that has a Markdown definition; they do not define its prompt. `/subagents` renders these effective values in the file view without changing the Markdown file.
 
 ## Define an agent
 
@@ -65,16 +67,16 @@ name: scout
 description: Fast read-only reconnaissance
 model: openai-codex/gpt-5.6-luna
 thinking: low
-tools: read, grep, find, ls, bash
+tools: read, grep, find, ls
 ---
 You are a fast codebase scout. Inspect only and return exact evidence.
 ```
 
-Supported frontmatter is deliberately limited to `name`, `description`, `model`, `thinking`, and comma-separated built-in `tools`. Omit `model` to inherit the parent model. Configure fallbacks through `settings.json`. Children inherit project context files, but not the parent conversation, skills, extensions, or session history; tasks must be self-contained.
+Supported frontmatter is deliberately limited to `name`, `description`, `model`, `thinking`, and comma-separated tools. Omit `model` to inherit the parent model. Configure fallbacks and timeouts through `settings.json`. Children inherit project context files and the guardrails policy extension, but not the parent conversation, skills, other extensions, or session history; tasks must be self-contained. Their normal system prompt is preserved and the role prompt is appended, so tool and environment guidance stays consistent across providers.
 
 Restoring defaults deletes the managed agent definitions and recopies `default-agents/*.md`. Configuration overrides in `settings.json` are not deleted.
 
-Every run immediately creates a Markdown report under `~/.config/agents/pi/reports/`, then atomically updates it on completion, failure, or abort. Foreground output links to the full report, and async `status` returns report paths.
+Every run immediately creates a Markdown report under `~/.config/agents/pi/reports/`, then atomically updates it on completion, failure, or abort. Foreground output links to the full report, and async `status` returns report paths. The newest 200 completed reports are retained; active reports are never pruned.
 
 ## Check
 

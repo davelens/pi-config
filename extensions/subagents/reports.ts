@@ -1,6 +1,7 @@
+import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 
 export type RunStatus = "running" | "completed" | "failed" | "aborted";
 
@@ -18,8 +19,21 @@ export interface RunReport {
   filePath: string;
 }
 
-export function acquireMutationLock(directory: string, cwd: string, runId: string): () => void {
+function mutationRoot(cwd: string): string {
   const canonicalCwd = existsSync(cwd) ? realpathSync(cwd) : resolve(cwd);
+  try {
+    return realpathSync(execFileSync("git", ["rev-parse", "--show-toplevel"], {
+      cwd: canonicalCwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim());
+  } catch {
+    return canonicalCwd;
+  }
+}
+
+export function acquireMutationLock(directory: string, cwd: string, runId: string): () => void {
+  const canonicalCwd = mutationRoot(cwd);
   const locksDirectory = join(directory, ".locks");
   const lockPath = join(locksDirectory, createHash("sha256").update(canonicalCwd).digest("hex"));
   const ownerPath = join(lockPath, "owner.json");
@@ -34,21 +48,22 @@ export function acquireMutationLock(directory: string, cwd: string, runId: strin
     } catch (error) {
       rmSync(temporaryPath, { recursive: true, force: true });
       if (!["EEXIST", "ENOTEMPTY"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
-      let pid: number | undefined;
+      let pid: number;
       try {
         pid = JSON.parse(readFileSync(ownerPath, "utf8")).pid;
-      } catch {}
-      if (typeof pid === "number") {
-        try {
-          process.kill(pid, 0);
-        } catch (ownerError) {
-          if ((ownerError as NodeJS.ErrnoException).code === "ESRCH") {
-            throw new Error(`A stale asynchronous writer lock blocks ${canonicalCwd}; remove ${lockPath}`);
-          }
-          throw ownerError;
-        }
+        if (!Number.isInteger(pid)) throw new Error("invalid pid");
+      } catch (ownerError) {
+        if ((ownerError as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw new Error(`A writer lock with invalid ownership data blocks ${canonicalCwd}; inspect ${lockPath}`);
       }
-      throw new Error(`An asynchronous writer is already running in ${canonicalCwd}`);
+      try {
+        process.kill(pid, 0);
+      } catch (ownerError) {
+        const code = (ownerError as NodeJS.ErrnoException).code;
+        if (code === "ESRCH") throw new Error(`A stale writer lock blocks ${canonicalCwd}; remove ${lockPath}`);
+        if (code !== "EPERM") throw ownerError;
+      }
+      throw new Error(`A writer is already running in ${canonicalCwd}; lock=${lockPath}`);
     }
   }
 
@@ -108,4 +123,13 @@ export function saveRunReport(report: RunReport): void {
 export function finishRunReport(report: RunReport, update: Pick<RunReport, "status"> & Partial<Pick<RunReport, "model" | "output" | "error">>): void {
   Object.assign(report, update, { finishedAt: new Date().toISOString() });
   saveRunReport(report);
+  pruneRunReports(dirname(report.filePath));
+}
+
+export function pruneRunReports(directory: string, keep = 200): void {
+  const completed = readdirSync(directory)
+    .filter((name) => name.endsWith(".md"))
+    .sort()
+    .filter((name) => readFileSync(join(directory, name), "utf8").split(/\r?\n/, 6)[4] !== "- Status: running");
+  for (const name of completed.slice(0, Math.max(0, completed.length - keep))) unlinkSync(join(directory, name));
 }

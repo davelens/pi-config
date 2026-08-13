@@ -4,6 +4,9 @@ import { join } from "node:path";
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
 
+const SUPPORTED_TOOLS = new Set(["read", "grep", "find", "ls", "bash", "edit", "write", "git_inspect", "ketch"]);
+const MUTATION_TOOLS = new Set(["bash", "edit", "write"]);
+
 export interface AgentConfig {
   name: string;
   description: string;
@@ -11,6 +14,9 @@ export interface AgentConfig {
   model?: string;
   fallbackModels?: string[];
   thinking?: ThinkingLevel;
+  timeoutMs?: number;
+  invalidTools?: string[];
+  warnings?: string[];
   prompt: string;
   filePath: string;
 }
@@ -20,6 +26,7 @@ interface AgentOverride {
   model?: string | null;
   fallbackModels?: string[];
   thinking?: ThinkingLevel;
+  timeoutMs?: number;
   tools?: string[];
 }
 
@@ -45,15 +52,18 @@ export function parseAgent(content: string, filePath = ""): AgentConfig | undefi
   if (!name || !description) return;
 
   const thinking = fields.get("thinking");
+  const tools = (fields.get("tools") ?? "read, grep, find, ls")
+    .split(",")
+    .map((tool) => tool.trim())
+    .filter(Boolean);
+  const invalidTools = tools.filter((tool) => !SUPPORTED_TOOLS.has(tool));
   return {
     name,
     description,
-    tools: (fields.get("tools") ?? "read, grep, find, ls")
-      .split(",")
-      .map((tool) => tool.trim())
-      .filter(Boolean),
+    tools,
     ...(fields.get("model") ? { model: fields.get("model") } : {}),
     ...(THINKING_LEVELS.includes(thinking as ThinkingLevel) ? { thinking: thinking as ThinkingLevel } : {}),
+    ...(invalidTools.length ? { invalidTools } : {}),
     prompt: match[2].trim(),
     filePath,
   };
@@ -83,13 +93,23 @@ function readOverrides(path: string | undefined): Record<string, AgentOverride> 
   }
 }
 
-function applyOverrides(agents: Map<string, AgentConfig>, overrides: Record<string, AgentOverride>): void {
+function applyOverrides(agents: Map<string, AgentConfig>, overrides: Record<string, AgentOverride>, allowMutationEscalation: boolean): void {
   for (const [name, override] of Object.entries(overrides)) {
     const agent = agents.get(name);
     if (!agent) continue;
     const next = { ...agent, ...override };
     if (override.model === null) delete next.model;
     if (!THINKING_LEVELS.includes(next.thinking as ThinkingLevel)) delete next.thinking;
+    if (typeof next.timeoutMs !== "number" || !Number.isFinite(next.timeoutMs) || next.timeoutMs <= 0 || next.timeoutMs > 2_147_483_647) delete next.timeoutMs;
+    if (override.tools) {
+      const blocked = allowMutationEscalation
+        ? []
+        : override.tools.filter((tool) => MUTATION_TOOLS.has(tool) && !agent.tools.includes(tool));
+      next.tools = override.tools.filter((tool) => !blocked.includes(tool));
+      next.invalidTools = next.tools.filter((tool) => !SUPPORTED_TOOLS.has(tool));
+      if (!next.invalidTools.length) delete next.invalidTools;
+      if (blocked.length) next.warnings = [...(agent.warnings ?? []), `Project override cannot grant mutation tools: ${blocked.join(", ")}`];
+    }
     agents.set(name, next);
   }
 }
@@ -97,9 +117,12 @@ function applyOverrides(agents: Map<string, AgentConfig>, overrides: Record<stri
 export function discoverAgents(options: {
   agentsDirectory: string;
   settingsPaths: string[];
+  projectSettingsPath?: string;
 }): AgentConfig[] {
   const agents = new Map<string, AgentConfig>();
   for (const agent of loadDirectory(options.agentsDirectory)) agents.set(agent.name, agent);
-  for (const settingsPath of options.settingsPaths) applyOverrides(agents, readOverrides(settingsPath));
+  for (const settingsPath of options.settingsPaths) {
+    applyOverrides(agents, readOverrides(settingsPath), settingsPath !== options.projectSettingsPath);
+  }
   return [...agents.values()];
 }

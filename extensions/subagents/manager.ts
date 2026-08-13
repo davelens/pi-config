@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import {
+  existsSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -267,7 +268,7 @@ export class SubagentManager implements Component {
       const agent = this.agents[index];
       let sidebar = "";
       if (agent) {
-        sidebar = `${index === this.selected ? ">" : " "} ${agent.name}`;
+        sidebar = `${index === this.selected ? ">" : " "} ${agent.name}${this.isCustomized(agent) ? " *" : ""}`;
         if (index === this.selected) sidebar = this.options.theme.bg("selectedBg", this.options.theme.bold(pad(sidebar, sidebarWidth)));
       }
       const content = highlighted[this.contentOffset + row] ?? "";
@@ -276,13 +277,18 @@ export class SubagentManager implements Component {
 
     lines.push(border("├") + border("─".repeat(innerWidth)) + border("┤"));
     lines.push(border("│") + pad(this.options.theme.fg(this.statusColor, this.status), innerWidth) + border("│"));
-    lines.push(border("│") + pad(this.options.theme.fg("dim", "ctrl+shift+r restore · c create · d delete · e rename · ctrl+e edit · h/l focus · j/k navigate · q/esc close"), innerWidth) + border("│"));
+    lines.push(border("│") + pad(this.options.theme.fg("dim", "* customized · ctrl+shift+r restore · c create · d delete · e rename · ctrl+e edit · h/l focus · j/k navigate · q/esc close"), innerWidth) + border("│"));
     lines.push(border("╰") + border("─".repeat(innerWidth)) + border("╯"));
     return lines;
   }
 
   private currentAgent(): AgentConfig | undefined {
     return this.agents[this.selected];
+  }
+
+  private isCustomized(agent: AgentConfig): boolean {
+    const defaultPath = join(this.options.defaultsDirectory, `${agent.name}.md`);
+    return !existsSync(defaultPath) || readFileSync(agent.filePath, "utf8") !== readFileSync(defaultPath, "utf8");
   }
 
   private setFocus(focus: "sidebar" | "content"): void {

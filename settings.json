@@ -43,7 +43,7 @@
   },
   "showCacheMissNotices": true,
   "quietStartup": true,
-  "defaultProjectTrust": "always",
+  "defaultProjectTrust": "ask",
   "doubleEscapeAction": "tree",
   "tuiMode": "regular",
   "fullscreenScrollbar": "auto"

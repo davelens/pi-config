@@ -53,7 +53,7 @@ Override bundled or custom agents in global `settings.json`, or in a trusted pro
 }
 ```
 
-Project settings override global settings. Supported overrides are `description`, `model`, `fallbackModels`, `thinking`, `timeoutMs`, and `tools`. Set `model` to `null` to inherit the parent model. A project override cannot grant `bash`, `edit`, or `write` to an agent whose effective global definition lacks that tool. Unsupported tool names are reported and block the run instead of being silently ignored. Overrides only configure an agent that has a Markdown definition; they do not define its prompt. `/subagents` renders these effective values in the file view without changing the Markdown file.
+Project settings override global settings. Supported overrides are `description`, `model`, `fallbackModels`, `thinking`, `timeoutMs`, `skills`, and `tools`. Set `model` to `null` to inherit the parent model. `skills` is an array of Pi skill names. A project override cannot grant `bash`, `edit`, or `write` to an agent whose effective global definition lacks that tool. Unsupported tool names are reported and block the run instead of being silently ignored. Overrides only configure an agent that has a Markdown definition; they do not define its prompt. `/subagents` renders these effective values in the file view without changing the Markdown file.
 
 ## Define an agent
 
@@ -67,12 +67,13 @@ name: scout
 description: Fast read-only reconnaissance
 model: openai-codex/gpt-5.6-luna
 thinking: low
+skills: project-conventions, ponytail
 tools: read, grep, find, ls
 ---
 You are a fast codebase scout. Inspect only and return exact evidence.
 ```
 
-Supported frontmatter is deliberately limited to `name`, `description`, `model`, `thinking`, and comma-separated tools. Omit `model` to inherit the parent model. Configure fallbacks and timeouts through `settings.json`. Children inherit project context files and the guardrails policy extension, but not the parent conversation, skills, other extensions, or session history; tasks must be self-contained. Their normal system prompt is preserved and the role prompt is appended, so tool and environment guidance stays consistent across providers.
+Supported frontmatter is deliberately limited to `name`, `description`, `model`, `thinking`, comma-separated `skills`, and comma-separated tools. Omit `model` to inherit the parent model. Configure fallbacks and timeouts through `settings.json`. Only skills named on that agent are exposed to the child; Pi resolves them through its normal trusted global, project, package, and configured skill paths. Configured skills require the `read` tool, and a missing skill blocks the run. Children inherit project context files and the guardrails policy extension, but not the parent conversation, ambient skills, other extensions, or session history; tasks must be self-contained. Their normal system prompt is preserved and the role prompt is appended, so tool and environment guidance stays consistent across providers.
 
 Restoring defaults deletes the managed agent definitions and recopies `default-agents/*.md`. Configuration overrides in `settings.json` are not deleted.
 

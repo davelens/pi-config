@@ -3,6 +3,7 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
+  lstatSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -63,6 +64,7 @@ export function withEffectiveSettings(content: string, agent: {
   model?: string;
   fallbackModels?: string[];
   thinking?: string;
+  skills?: string[];
   tools: string[];
 }): string {
   const parts = agentDefinitionParts(content);
@@ -72,6 +74,7 @@ export function withEffectiveSettings(content: string, agent: {
     ["model", agent.model],
     ["fallbackModels", agent.fallbackModels?.join(", ")],
     ["thinking", agent.thinking],
+    ["skills", agent.skills?.join(", ")],
     ["tools", agent.tools.length ? agent.tools.join(", ") : "[]"],
   ]);
   for (const [name, value] of fields) {

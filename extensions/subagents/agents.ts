@@ -15,6 +15,7 @@ export interface AgentConfig {
   fallbackModels?: string[];
   thinking?: ThinkingLevel;
   timeoutMs?: number;
+  skills?: string[];
   invalidTools?: string[];
   warnings?: string[];
   prompt: string;
@@ -27,6 +28,7 @@ interface AgentOverride {
   fallbackModels?: string[];
   thinking?: ThinkingLevel;
   timeoutMs?: number;
+  skills?: string[];
   tools?: string[];
 }
 
@@ -57,13 +59,19 @@ export function parseAgent(content: string, filePath = ""): AgentConfig | undefi
     .map((tool) => tool.trim())
     .filter(Boolean);
   const invalidTools = tools.filter((tool) => !SUPPORTED_TOOLS.has(tool));
+  const skills = (fields.get("skills") ?? "").split(",").map((skill) => skill.trim()).filter(Boolean);
+  const warnings = thinking && !THINKING_LEVELS.includes(thinking as ThinkingLevel)
+    ? [`Invalid thinking level '${thinking}'${filePath ? ` in ${filePath}` : ""}`]
+    : [];
   return {
     name,
     description,
     tools,
     ...(fields.get("model") ? { model: fields.get("model") } : {}),
     ...(THINKING_LEVELS.includes(thinking as ThinkingLevel) ? { thinking: thinking as ThinkingLevel } : {}),
+    ...(skills.length ? { skills } : {}),
     ...(invalidTools.length ? { invalidTools } : {}),
+    ...(warnings.length ? { warnings } : {}),
     prompt: match[2].trim(),
     filePath,
   };
@@ -99,19 +107,51 @@ function applyOverrides(agents: Map<string, AgentConfig>, overrides: Record<stri
     if (!agent) continue;
     const next = { ...agent, ...override };
     if (override.model === null) delete next.model;
-    if (!THINKING_LEVELS.includes(next.thinking as ThinkingLevel)) delete next.thinking;
+    else if (override.model !== undefined && typeof override.model !== "string") {
+      next.model = agent.model;
+      next.warnings = [...(next.warnings ?? []), "Model override must be a model name or null"];
+    }
+    if (!THINKING_LEVELS.includes(next.thinking as ThinkingLevel)) {
+      if (override.thinking !== undefined) next.warnings = [...(agent.warnings ?? []), `Invalid thinking override '${override.thinking}'`];
+      delete next.thinking;
+    }
     if (typeof next.timeoutMs !== "number" || !Number.isFinite(next.timeoutMs) || next.timeoutMs <= 0 || next.timeoutMs > 2_147_483_647) delete next.timeoutMs;
-    if (override.tools) {
-      const blocked = allowMutationEscalation
-        ? []
-        : override.tools.filter((tool) => MUTATION_TOOLS.has(tool) && !agent.tools.includes(tool));
-      next.tools = override.tools.filter((tool) => !blocked.includes(tool));
-      next.invalidTools = next.tools.filter((tool) => !SUPPORTED_TOOLS.has(tool));
-      if (!next.invalidTools.length) delete next.invalidTools;
-      if (blocked.length) next.warnings = [...(agent.warnings ?? []), `Project override cannot grant mutation tools: ${blocked.join(", ")}`];
+    if (override.fallbackModels !== undefined) {
+      if (Array.isArray(override.fallbackModels) && override.fallbackModels.every((model) => typeof model === "string")) {
+        next.fallbackModels = [...new Set(override.fallbackModels.map((model) => model.trim()).filter(Boolean))];
+      } else {
+        next.fallbackModels = agent.fallbackModels;
+        next.warnings = [...(next.warnings ?? []), "Fallback models override must be an array of model names"];
+      }
+    }
+    if (override.skills !== undefined) {
+      if (Array.isArray(override.skills) && override.skills.every((skill) => typeof skill === "string")) {
+        next.skills = [...new Set(override.skills.map((skill) => skill.trim()).filter(Boolean))];
+      } else {
+        next.skills = agent.skills;
+        next.warnings = [...(next.warnings ?? []), "Skills override must be an array of names"];
+      }
+    }
+    if (override.tools !== undefined) {
+      if (!Array.isArray(override.tools) || !override.tools.every((tool) => typeof tool === "string")) {
+        next.tools = agent.tools;
+        next.warnings = [...(next.warnings ?? []), "Tools override must be an array of tool names"];
+      } else {
+        const blocked = allowMutationEscalation
+          ? []
+          : override.tools.filter((tool) => MUTATION_TOOLS.has(tool) && !agent.tools.includes(tool));
+        next.tools = override.tools.filter((tool) => !blocked.includes(tool));
+        next.invalidTools = next.tools.filter((tool) => !SUPPORTED_TOOLS.has(tool));
+        if (!next.invalidTools.length) delete next.invalidTools;
+        if (blocked.length) next.warnings = [...(next.warnings ?? []), `Project override cannot grant mutation tools: ${blocked.join(", ")}`];
+      }
     }
     agents.set(name, next);
   }
+}
+
+export function agentConfigurationIssues(agent: Pick<AgentConfig, "skills" | "tools">): string[] {
+  return agent.skills?.length && !agent.tools.includes("read") ? ["configured skills require the read tool"] : [];
 }
 
 export function discoverAgents(options: {

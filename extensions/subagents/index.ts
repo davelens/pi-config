@@ -19,7 +19,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type, type Static } from "typebox";
-import { discoverAgents, type AgentConfig } from "./agents.ts";
+import { agentConfigurationIssues, discoverAgents, type AgentConfig } from "./agents.ts";
 import { ensureDefaultAgents } from "./agent-files.ts";
 import { SubagentManager } from "./manager.ts";
 import { acquireMutationLock, finishRunReport, startRunReport } from "./reports.ts";
@@ -32,7 +32,8 @@ const REPORTS_DIRECTORY = join(AGENTS_DIRECTORY, "reports");
 const GUARDRAILS_EXTENSION = join(getAgentDir(), "npm", "node_modules", "@aliou", "pi-guardrails", "extensions", "guardrails", "index.ts");
 const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
 const SUBAGENT_BOUNDARIES = `# Boundaries
-Return only the requested deliverable and blockers, as concisely as correctness allows. Do one pass, stop when the task is answered, and do not expand scope, propose follow-up work, or continue searching for additional issues unless the task explicitly requires it.\nTreat pre-existing worktree and index changes as human-owned. Preserve them: never stash, reset, restore, clean, discard, or overwrite unrelated changes. Stop and report a blocker when overlap prevents safe work.`;
+Return only the requested deliverable and blockers, as concisely as correctness allows. Do one pass, stop when the task is answered, and do not expand scope, propose follow-up work, or continue searching for additional issues unless the task explicitly requires it.
+Treat pre-existing worktree and index changes as human-owned. Preserve them: never stash, reset, restore, clean, discard, or overwrite unrelated changes. Stop and report a blocker when overlap prevents safe work.`;
 const gitInspectSchema = Type.Object({
   command: StringEnum(["git diff", "git diff --cached", "git status --short", "git diff <base>...HEAD", "git log <base>..HEAD --oneline"] as const),
   base: Type.Optional(Type.String({ description: "Base revision for commands containing <base>" })),
@@ -96,6 +97,17 @@ function agentsFor(ctx: ExtensionContext): AgentConfig[] {
   });
 }
 
+function childSettings(cwd: string, ctx: ExtensionContext): SettingsManager {
+  return SettingsManager.create(cwd, getAgentDir(), { projectTrusted: ctx.isProjectTrusted() });
+}
+
+function applyChildRuntimeSettings(settings: SettingsManager): void {
+  settings.applyOverrides({
+    httpIdleTimeoutMs: 0,
+    retry: { enabled: true, maxRetries: 2 },
+  });
+}
+
 function textFromLastAssistantMessage(messages: readonly unknown[]): string {
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index] as {
@@ -139,25 +151,35 @@ async function runAttempt(agent: AgentConfig, task: string, cwd: string, modelNa
 
   if (!existsSync(GUARDRAILS_EXTENSION)) throw new Error(`Subagent guardrails are unavailable: ${GUARDRAILS_EXTENSION}`);
 
-  const settingsManager = SettingsManager.inMemory({
-    httpIdleTimeoutMs: 0,
-    retry: { enabled: true, maxRetries: 2 },
-  });
+  const configurationIssues = agentConfigurationIssues(agent);
+  if (configurationIssues.length) throw new Error(`${agent.name}: ${configurationIssues.join("; ")}`);
+  const settingsManager = childSettings(cwd, ctx);
+  const selectedSkills = new Set(agent.skills ?? []);
   const resourceLoader = new DefaultResourceLoader({
     cwd,
     agentDir: getAgentDir(),
     settingsManager,
     additionalExtensionPaths: [GUARDRAILS_EXTENSION],
     noExtensions: true,
-    noSkills: true,
+    noSkills: selectedSkills.size === 0,
     noPromptTemplates: true,
     noThemes: true,
+    skillsOverride: selectedSkills.size ? (base) => ({
+      skills: base.skills
+        .filter((skill) => selectedSkills.has(skill.name))
+        .map((skill) => ({ ...skill, disableModelInvocation: false })),
+      diagnostics: base.diagnostics,
+    }) : undefined,
     systemPromptOverride: (base) => `${base ?? ""}\n\n# Subagent role\n${agent.prompt}\n\n${SUBAGENT_BOUNDARIES}`.trim(),
     appendSystemPromptOverride: () => [],
   });
   await resourceLoader.reload();
+  applyChildRuntimeSettings(settingsManager);
   const extensionErrors = resourceLoader.getExtensions().errors;
   if (extensionErrors.length) throw new Error(`Could not load subagent guardrails: ${extensionErrors.map(({ error }) => error).join("; ")}`);
+  const loadedSkills = new Set(resourceLoader.getSkills().skills.map((skill) => skill.name));
+  const missingSkills = [...selectedSkills].filter((skill) => !loadedSkills.has(skill));
+  if (missingSkills.length) throw new Error(`Skills not found for ${agent.name}: ${missingSkills.join(", ")}`);
 
   const customTools: ToolDefinition[] = [];
   if (agent.tools.includes("git_inspect")) customTools.push({
@@ -339,7 +361,7 @@ export default function subagents(pi: ExtensionAPI) {
           content: [{
             type: "text",
             text: agents.map((agent) =>
-              `${agent.name} — ${agent.description}; model=${agent.model ?? "parent"}${agent.fallbackModels?.length ? `; fallbacks=${agent.fallbackModels.join(",")}` : ""}; timeout=${agent.timeoutMs ?? DEFAULT_TIMEOUT_MS}ms; tools=${agent.tools.join(",")}${agent.invalidTools?.length ? `; INVALID TOOLS=${agent.invalidTools.join(",")}` : ""}${agent.warnings?.length ? `; warnings=${agent.warnings.join(" | ")}` : ""}`
+              `${agent.name} — ${agent.description}; model=${agent.model ?? "parent"}${agent.fallbackModels?.length ? `; fallbacks=${agent.fallbackModels.join(",")}` : ""}; timeout=${agent.timeoutMs ?? DEFAULT_TIMEOUT_MS}ms; tools=${agent.tools.join(",")}${agent.skills?.length ? `; skills=${agent.skills.join(",")}` : ""}${agent.invalidTools?.length ? `; INVALID TOOLS=${agent.invalidTools.join(",")}` : ""}${agent.warnings?.length ? `; warnings=${agent.warnings.join(" | ")}` : ""}`
             ).join("\n") || "No subagents found",
           }],
           details: { agents: agents.map(({ prompt: _prompt, ...agent }) => agent) },

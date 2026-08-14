@@ -601,7 +601,7 @@ export default function subagents(pi: ExtensionAPI) {
             if (result.status === "waiting") {
               const message = formatParentRequest(agent.name, report.id, result.request);
               ctx.ui.notify(`${agent.name} needs parent input`, "warning");
-              pi.sendMessage({ customType: "subagent-parent-request", content: message, display: true }, { deliverAs: "followUp", triggerTurn: true });
+              pi.sendMessage({ customType: "subagent-parent-request", content: message, display: true }, { deliverAs: "steer", triggerTurn: true });
             } else {
               ctx.ui.notify(`${agent.name} completed: ${report.filePath}`, "info");
             }

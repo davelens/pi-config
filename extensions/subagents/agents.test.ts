@@ -402,8 +402,24 @@ test("default planner and worker enforce cohesive slices", () => {
 
   assert.match(planner, /## Worker Slices/);
   assert.match(planner, /self-contained, paste-ready task/);
+  assert.match(worker, /read and follow the `project-conventions` and `ponytail` skills/);
   assert.match(worker, /SPLIT_REQUIRED/);
   assert.match(worker, /implementation and focused tests in the same slice/);
+});
+
+test("default agents expose role-specific skills", () => {
+  const expected = {
+    delegate: ["project-conventions", "ponytail"],
+    oracle: ["project-conventions", "ponytail", "codebase-design"],
+    planner: ["project-conventions", "ponytail", "codebase-design"],
+    researcher: ["ketch", "docs-reference"],
+    reviewer: ["project-conventions", "ponytail-review"],
+    worker: ["project-conventions", "ponytail", "diagnosing-bugs", "tdd", "docs-reference"],
+  };
+  for (const [name, skills] of Object.entries(expected)) {
+    const agent = parseAgent(readFileSync(join(import.meta.dirname, "default-agents", `${name}.md`), "utf8"));
+    assert.deepEqual(agent?.skills, skills);
+  }
 });
 
 test("default read-only agents are not mutation-capable", () => {

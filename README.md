@@ -20,7 +20,7 @@ cd ~/.config/pi && chmod +x setup.sh && ./setup.sh
 
 Or just clone and run `pi` — it auto-discovers skills, extensions, prompts, and themes.
 
-This config keeps Pi's global agent directory XDG-style at `~/.config/pi`. Pi core can use that directly via `PI_CODING_AGENT_DIR=~/.config/pi`; `setup.sh` also creates a compatibility symlink so older packages that hardcode `~/.pi/agent` resolve back into `~/.config/pi` instead of creating a real `~/.pi` directory.
+This config keeps Pi's global agent directory XDG-style at `~/.config/pi`. Set `PI_CODING_AGENT_DIR=~/.config/pi`; `setup.sh` does not create Pi's legacy `~/.pi` directory.
 
 ## Editing the current input prompt in Neovim
 

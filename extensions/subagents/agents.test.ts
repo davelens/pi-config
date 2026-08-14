@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { agentConfigurationIssues, diagnoseAgentDefinitions, discoverAgents, parseAgent } from "./agents.ts";
+import { promptChild } from "./prompt-child.ts";
 import {
   createAgentDefinition,
   deleteAgentDefinition,
@@ -321,6 +322,19 @@ test("maps stream jump keys", () => {
   assert.deepEqual(streamJump("{", false), { jump: -10, pendingG: false });
 });
 
+test("reports child timeouts instead of provider aborts", async () => {
+  let rejectPrompt!: (error: Error) => void;
+  const session = {
+    prompt: () => new Promise<void>((_resolve, reject) => { rejectPrompt = reject; }),
+    abort: () => rejectPrompt(new Error("Request was aborted")),
+  };
+
+  await assert.rejects(
+    promptChild(session, "Task", new AbortController().signal, 5),
+    /Subagent attempt timed out after 5ms/,
+  );
+});
+
 test("tracks foreground runs and forwards cancellation", () => {
   const directory = mkdtempSync(join(tmpdir(), "lofi-subagent-foreground-"));
   const report = startRunReport(directory, "reviewer", "Review this", "/project");
@@ -347,6 +361,16 @@ test("preflights every settings override before renaming an agent", () => {
   assert.equal(existsSync(source), true);
   assert.equal(existsSync(join(directory, "auditor.md")), false);
   assert.equal(readFileSync(firstSettings, "utf8"), originalSettings);
+});
+
+test("default planner and worker enforce cohesive slices", () => {
+  const planner = readFileSync(join(import.meta.dirname, "default-agents", "planner.md"), "utf8");
+  const worker = readFileSync(join(import.meta.dirname, "default-agents", "worker.md"), "utf8");
+
+  assert.match(planner, /## Worker Slices/);
+  assert.match(planner, /self-contained, paste-ready task/);
+  assert.match(worker, /SPLIT_REQUIRED/);
+  assert.match(worker, /implementation and focused tests in the same slice/);
 });
 
 test("default read-only agents are not mutation-capable", () => {

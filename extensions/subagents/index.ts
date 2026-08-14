@@ -3,7 +3,6 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  AgentSession,
   CONFIG_DIR_NAME,
   createAgentSession,
   DefaultResourceLoader,
@@ -26,6 +25,7 @@ import { createContactParentTool } from "./contact-parent.ts";
 import { buildDoctorReport } from "./doctor-report.ts";
 import { SubagentsDoctor } from "./doctor.ts";
 import { SubagentManager } from "./manager.ts";
+import { promptChild } from "./prompt-child.ts";
 import { acquireMutationLock, finishRunReport, pauseRunReport, resumeRunReport, startRunReport } from "./reports.ts";
 import { captureRunMessage, trackRun, type ActiveRun } from "./run-stream.ts";
 import { SubagentStatus } from "./status.ts";
@@ -173,22 +173,6 @@ function resolveModelAvailable(modelName: string, ctx: ExtensionContext): boolea
   return separator > 0 && Boolean(ctx.modelRegistry.find(modelName.slice(0, separator), modelName.slice(separator + 1)));
 }
 
-async function promptChild(session: AgentSession, prompt: string, signal: AbortSignal, timeoutMs: number): Promise<void> {
-  const timeoutSignal = AbortSignal.timeout(timeoutMs);
-  const turnSignal = AbortSignal.any([signal, timeoutSignal]);
-  const abort = () => void session.abort();
-  turnSignal.addEventListener("abort", abort, { once: true });
-  try {
-    turnSignal.throwIfAborted();
-    await session.prompt(prompt);
-  } catch (error) {
-    if (timeoutSignal.aborted && !signal.aborted) throw new Error(`Subagent attempt timed out after ${timeoutMs}ms`);
-    throw error;
-  } finally {
-    turnSignal.removeEventListener("abort", abort);
-  }
-}
-
 function resolveModel(modelName: string | undefined, agent: AgentConfig, ctx: ExtensionContext) {
   if (!modelName) {
     if (!ctx.model) throw new Error("No model is active");
@@ -203,10 +187,8 @@ function resolveModel(modelName: string | undefined, agent: AgentConfig, ctx: Ex
 }
 
 async function runAttempt(agent: AgentConfig, task: string, cwd: string, modelName: string | undefined, signal: AbortSignal, timeoutMs: number, ctx: ExtensionContext, pi: ExtensionAPI, onEvent?: (event: AgentSessionEvent) => void): Promise<AgentResult> {
-  const timeoutSignal = AbortSignal.timeout(timeoutMs);
-  const runSignal = AbortSignal.any([signal, timeoutSignal]);
   const model = resolveModel(modelName, agent, ctx);
-  const modelRuntime = await ModelRuntime.create({ refreshOnCreate: false, signal: runSignal });
+  const modelRuntime = await ModelRuntime.create({ refreshOnCreate: false, signal });
   const provider = ctx.modelRegistry.getProvider(model.provider);
   if (!provider) throw new Error(`Provider '${model.provider}' is unavailable`);
   modelRuntime.registerNativeProvider(provider);
@@ -521,7 +503,8 @@ export default function subagents(pi: ExtensionAPI) {
       "Use subagent with action=status to inspect asynchronous runs and action=stop to abort one.",
       "When a subagent pauses for parent input, answer from established context or use ask_user_question, then call subagent action=resume with the same runId and the answer.",
       "Use separate subagent calls for independent parallel tasks; mutation-capable subagents are limited to one per Git worktree.",
-      "Run each requested subagent at most once. Do not automatically rerun it or dispatch follow-up subagents unless the current user explicitly asks.",
+      "For user-approved broad implementation, use a planner first and dispatch its independent worker slices sequentially in dependency order.",
+      "Run each worker slice once. Do not retry failed slices or add follow-up validation agents unless the current user explicitly asks.",
     ],
     parameters: Type.Object({
       action: StringEnum(["list", "run", "resume", "status", "stop"] as const),

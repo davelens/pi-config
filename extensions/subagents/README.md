@@ -43,6 +43,10 @@ Override bundled or custom agents in global `settings.json`, or in a trusted pro
 ```json
 {
   "subagents": {
+    "aliases": {
+      "architect": "planner",
+      "coder": "worker"
+    },
     "agentOverrides": {
       "reviewer": {
         "model": "openai-codex/gpt-5.6-sol",
@@ -56,7 +60,7 @@ Override bundled or custom agents in global `settings.json`, or in a trusted pro
 }
 ```
 
-Project settings override global settings. Supported overrides are `description`, `model`, `fallbackModels`, `thinking`, `timeoutMs`, `skills`, and `tools`. Set `model` to `null` to inherit the parent model. `skills` is an array of Pi skill names. A project override cannot grant `bash`, `edit`, or `write` to an agent whose effective global definition lacks that tool. Unsupported tool names are reported and block the run instead of being silently ignored. Overrides only configure an agent that has a Markdown definition; they do not define its prompt. `/subagents` renders these effective values in the file view without changing the Markdown file.
+Project settings override global settings. `aliases` maps alternate names to configured agents; direct agent names take precedence over aliases. Supported overrides are `description`, `model`, `fallbackModels`, `thinking`, `timeoutMs`, `skills`, and `tools`. Set `model` to `null` to inherit the parent model. `skills` is an array of Pi skill names. A project override cannot grant `bash`, `edit`, or `write` to an agent whose effective global definition lacks that tool. Unsupported tool names are reported and block the run instead of being silently ignored. Overrides only configure an agent that has a Markdown definition; they do not define its prompt. `/subagents` renders these effective values in the file view without changing the Markdown file.
 
 ## Define an agent
 

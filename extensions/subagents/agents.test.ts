@@ -3,7 +3,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { agentConfigurationIssues, diagnoseAgentDefinitions, discoverAgents, parseAgent } from "./agents.ts";
+import { agentConfigurationIssues, diagnoseAgentDefinitions, discoverAgents, parseAgent, resolveAgent } from "./agents.ts";
 import { promptChild } from "./prompt-child.ts";
 import {
   createAgentDefinition,
@@ -47,6 +47,24 @@ test("parses definitions and applies settings overrides in order", () => {
   assert.deepEqual(parsed?.tools, ["read", "grep"]);
   assert.deepEqual(parsed?.skills, ["code-review", "ponytail"]);
   assert.equal(parsed?.thinking, "low");
+});
+
+test("resolves configurable aliases with project precedence", () => {
+  const root = mkdtempSync(join(tmpdir(), "lofi-subagent-aliases-"));
+  const agentsDirectory = join(root, "agents");
+  const globalSettings = join(root, "settings.json");
+  const projectSettings = join(root, "project-settings.json");
+  mkdirSync(agentsDirectory);
+  writeFileSync(join(agentsDirectory, "planner.md"), definition("planner", "Plan work"));
+  writeFileSync(join(agentsDirectory, "worker.md"), definition("worker", "Build work"));
+  writeFileSync(globalSettings, JSON.stringify({ subagents: { aliases: { architect: "planner", coder: "worker", planner: "worker" } } }));
+  writeFileSync(projectSettings, JSON.stringify({ subagents: { aliases: { architect: "worker", missing: "unknown" } } }));
+
+  const agents = discoverAgents({ agentsDirectory, settingsPaths: [globalSettings, projectSettings], projectSettingsPath: projectSettings });
+  assert.equal(resolveAgent(agents, "architect")?.name, "worker");
+  assert.equal(resolveAgent(agents, "coder")?.name, "worker");
+  assert.equal(resolveAgent(agents, "planner")?.name, "planner");
+  assert.equal(resolveAgent(agents, "missing"), undefined);
 });
 
 test("diagnoses malformed definitions and invalid thinking", () => {
@@ -206,6 +224,7 @@ test("renders effective settings without changing the definition", () => {
     fallbackModels: ["openai/fallback"],
     thinking: "xhigh",
     skills: ["code-review", "ponytail"],
+    aliases: ["architect", "adviser"],
     tools: ["read", "bash"],
   });
   assert.match(rendered, /^description: "effective description"$/m);
@@ -213,6 +232,7 @@ test("renders effective settings without changing the definition", () => {
   assert.match(rendered, /^fallbackModels: "openai\/fallback"$/m);
   assert.match(rendered, /^thinking: "xhigh"$/m);
   assert.match(rendered, /^skills: "code-review, ponytail"$/m);
+  assert.match(rendered, /^aliases: "architect, adviser"$/m);
   assert.match(rendered, /^tools: "read, bash"$/m);
   assert.match(withEffectiveSettings(content, { description: "", tools: [] }), /^description: ""$/m);
   assert.match(withEffectiveSettings(content, { description: "", tools: [] }), /^tools: "\[\]"$/m);
@@ -361,6 +381,19 @@ test("preflights every settings override before renaming an agent", () => {
   assert.equal(existsSync(source), true);
   assert.equal(existsSync(join(directory, "auditor.md")), false);
   assert.equal(readFileSync(firstSettings, "utf8"), originalSettings);
+});
+
+test("renaming an agent updates alias targets", () => {
+  const directory = mkdtempSync(join(tmpdir(), "lofi-subagent-alias-rename-"));
+  const source = join(directory, "planner.md");
+  const settingsPath = join(directory, "settings.json");
+  writeFileSync(source, definition("planner", "Plan work"));
+  writeFileSync(settingsPath, JSON.stringify({ subagents: { aliases: { architect: "planner" } } }));
+
+  renameAgentWithSettings(source, [settingsPath], "planner", "strategist");
+
+  const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+  assert.equal(settings.subagents.aliases.architect, "strategist");
 });
 
 test("default planner and worker enforce cohesive slices", () => {

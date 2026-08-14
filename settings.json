@@ -30,6 +30,11 @@
     "~/.config/agents/skills/pi"
   ],
   "subagents": {
+    "aliases": {
+      "architect": "planner",
+      "coder": "worker",
+      "developer": "worker"
+    },
     "agentOverrides": {
       "oracle": {
         "model": "openai-codex/gpt-5.6-sol",

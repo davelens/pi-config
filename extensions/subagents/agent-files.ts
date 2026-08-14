@@ -70,6 +70,7 @@ export function withEffectiveSettings(content: string, agent: {
   fallbackModels?: string[];
   thinking?: string;
   skills?: string[];
+  aliases?: string[];
   tools: string[];
 }): string {
   const parts = agentDefinitionParts(content);
@@ -80,6 +81,7 @@ export function withEffectiveSettings(content: string, agent: {
     ["fallbackModels", agent.fallbackModels?.join(", ")],
     ["thinking", agent.thinking],
     ["skills", agent.skills?.join(", ")],
+    ["aliases", agent.aliases?.join(", ")],
     ["tools", agent.tools.length ? agent.tools.join(", ") : "[]"],
   ]);
   for (const [name, value] of fields) {
@@ -183,10 +185,20 @@ export function renameAgentWithSettings(filePath: string, settingsPaths: string[
     const original = readFileSync(settingsPath, "utf8");
     const settings = JSON.parse(original);
     const overrides = settings.subagents?.agentOverrides;
-    if (!overrides?.[oldName]) return [];
-    if (overrides[newName]) throw new Error(`Override '${newName}' already exists in ${settingsPath}`);
-    overrides[newName] = overrides[oldName];
-    delete overrides[oldName];
+    const aliases = settings.subagents?.aliases;
+    const hasOverride = Boolean(overrides?.[oldName]);
+    const hasAliasTarget = aliases && Object.values(aliases).includes(oldName);
+    if (!hasOverride && !hasAliasTarget) return [];
+    if (hasOverride) {
+      if (overrides[newName]) throw new Error(`Override '${newName}' already exists in ${settingsPath}`);
+      overrides[newName] = overrides[oldName];
+      delete overrides[oldName];
+    }
+    if (hasAliasTarget) {
+      for (const [alias, target] of Object.entries(aliases)) {
+        if (target === oldName) aliases[alias] = newName;
+      }
+    }
     return [{ path: settingsPath, original, updated: `${JSON.stringify(settings, null, 2)}\n` }];
   });
 

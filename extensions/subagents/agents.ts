@@ -17,6 +17,7 @@ export interface AgentConfig {
   thinking?: ThinkingLevel;
   timeoutMs?: number;
   skills?: string[];
+  aliases?: string[];
   invalidTools?: string[];
   warnings?: string[];
   prompt: string;
@@ -93,12 +94,19 @@ function loadDirectory(directory: string): AgentConfig[] {
   });
 }
 
-function readOverrides(path: string | undefined): Record<string, AgentOverride> {
-  if (!path) return {};
+function readSettings(path: string | undefined): {
+  agentOverrides: Record<string, AgentOverride>;
+  aliases: Record<string, string>;
+} {
+  if (!path) return { agentOverrides: {}, aliases: {} };
   try {
-    return JSON.parse(readFileSync(path, "utf8")).subagents?.agentOverrides ?? {};
+    const subagents = JSON.parse(readFileSync(path, "utf8")).subagents;
+    return {
+      agentOverrides: subagents?.agentOverrides ?? {},
+      aliases: Object.fromEntries(Object.entries(subagents?.aliases ?? {}).filter((entry): entry is [string, string] => typeof entry[1] === "string")),
+    };
   } catch {
-    return {};
+    return { agentOverrides: {}, aliases: {} };
   }
 }
 
@@ -189,9 +197,21 @@ export function discoverAgents(options: {
   projectSettingsPath?: string;
 }): AgentConfig[] {
   const agents = new Map<string, AgentConfig>();
+  const aliases = new Map<string, string>();
   for (const agent of loadDirectory(options.agentsDirectory)) agents.set(agent.name, agent);
   for (const settingsPath of options.settingsPaths) {
-    applyOverrides(agents, readOverrides(settingsPath), settingsPath !== options.projectSettingsPath);
+    const settings = readSettings(settingsPath);
+    applyOverrides(agents, settings.agentOverrides, settingsPath !== options.projectSettingsPath);
+    for (const [alias, target] of Object.entries(settings.aliases)) aliases.set(alias, target);
+  }
+  for (const [alias, target] of aliases) {
+    if (agents.has(alias)) continue;
+    const agent = agents.get(target);
+    if (agent) agent.aliases = [...(agent.aliases ?? []), alias];
   }
   return [...agents.values()];
+}
+
+export function resolveAgent(agents: AgentConfig[], name: string): AgentConfig | undefined {
+  return agents.find((agent) => agent.name === name) ?? agents.find((agent) => agent.aliases?.includes(name));
 }

@@ -19,7 +19,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type, type Static } from "typebox";
-import { agentConfigurationIssues, diagnoseAgentDefinitions, discoverAgents, FORBIDDEN_CHILD_SKILL, type AgentConfig } from "./agents.ts";
+import { agentConfigurationIssues, diagnoseAgentDefinitions, discoverAgents, FORBIDDEN_CHILD_SKILL, resolveAgent, type AgentConfig } from "./agents.ts";
 import { ensureDefaultAgents } from "./agent-files.ts";
 import { createContactParentTool } from "./contact-parent.ts";
 import { buildDoctorReport } from "./doctor-report.ts";
@@ -522,7 +522,7 @@ export default function subagents(pi: ExtensionAPI) {
           content: [{
             type: "text",
             text: agents.map((agent) =>
-              `${agent.name} — ${agent.description}; model=${agent.model ?? "parent"}${agent.fallbackModels?.length ? `; fallbacks=${agent.fallbackModels.join(",")}` : ""}; timeout=${agent.timeoutMs ?? DEFAULT_TIMEOUT_MS}ms; tools=${agent.tools.join(",")}${agent.skills?.length ? `; skills=${agent.skills.join(",")}` : ""}${agent.invalidTools?.length ? `; INVALID TOOLS=${agent.invalidTools.join(",")}` : ""}${agent.warnings?.length ? `; warnings=${agent.warnings.join(" | ")}` : ""}`
+              `${agent.name}${agent.aliases?.length ? ` (aliases: ${agent.aliases.join(", ")})` : ""} — ${agent.description}; model=${agent.model ?? "parent"}${agent.fallbackModels?.length ? `; fallbacks=${agent.fallbackModels.join(",")}` : ""}; timeout=${agent.timeoutMs ?? DEFAULT_TIMEOUT_MS}ms; tools=${agent.tools.join(",")}${agent.skills?.length ? `; skills=${agent.skills.join(",")}` : ""}${agent.invalidTools?.length ? `; INVALID TOOLS=${agent.invalidTools.join(",")}` : ""}${agent.warnings?.length ? `; warnings=${agent.warnings.join(" | ")}` : ""}`
             ).join("\n") || "No subagents found",
           }],
           details: { agents: agents.map(({ prompt: _prompt, ...agent }) => agent) },
@@ -575,7 +575,7 @@ export default function subagents(pi: ExtensionAPI) {
       }
 
       if (!params.agent || !params.task) throw new Error("action=run requires agent and task");
-      const agent = agents.find(({ name }) => name === params.agent);
+      const agent = resolveAgent(agents, params.agent);
       if (!agent) throw new Error(`Unknown subagent '${params.agent}'. Available: ${agents.map(({ name }) => name).join(", ")}`);
       if (agent.invalidTools?.length) throw new Error(`${agent.name} has unsupported tools: ${agent.invalidTools.join(", ")}`);
       const writes = agent.tools.some((tool) => tool === "bash" || tool === "edit" || tool === "write");

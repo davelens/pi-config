@@ -28,6 +28,7 @@ export interface ActiveRun {
   signal: AbortSignal;
   promise: Promise<void>;
   messages: RunMessage[];
+  detached: boolean;
 }
 
 export function trackRun(runs: Map<string, ActiveRun>, report: RunReport, parentSignal: AbortSignal | undefined, detached: boolean): ActiveRun {
@@ -38,9 +39,28 @@ export function trackRun(runs: Map<string, ActiveRun>, report: RunReport, parent
     signal: detached || !parentSignal ? controller.signal : AbortSignal.any([parentSignal, controller.signal]),
     promise: Promise.resolve(),
     messages: [],
+    detached,
   };
   runs.set(report.id, run);
   return run;
+}
+
+export async function waitForRun(run: ActiveRun, signal?: AbortSignal): Promise<void> {
+  if (!run.detached) throw new Error(`Run ${run.report.id} was not started asynchronously`);
+  signal?.throwIfAborted();
+  if (!signal) return run.promise;
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = () => signal.removeEventListener("abort", abort);
+    const abort = () => {
+      cleanup();
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    run.promise.then(
+      () => { cleanup(); resolve(); },
+      (error) => { cleanup(); reject(error); },
+    );
+  });
 }
 
 function resultContent(result: unknown): unknown {

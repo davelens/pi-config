@@ -15,9 +15,9 @@ import {
   restoreDefaultAgents,
   withEffectiveSettings,
 } from "./agent-files.ts";
-import { acquireMutationLock, finishRunReport, pauseRunReport, pruneRunReports, resumeRunReport, startRunReport } from "./reports.ts";
+import { acquireMutationLock, finishRunReport, pauseRunReport, pruneRunReports, recordRunSession, resumeRunReport, startRunReport } from "./reports.ts";
 import { buildDoctorReport } from "./doctor-report.ts";
-import { captureRunMessage, streamJump, trackRun, type RunMessage } from "./run-stream.ts";
+import { captureRunMessage, streamJump, trackRun, waitForRun, type RunMessage } from "./run-stream.ts";
 import { formatParentRequest, formatResumePrompt } from "./supervision.ts";
 
 const definition = (name: string, description: string) => `---\nname: ${name}\ndescription: ${description}\ntools: read, grep\nthinking: low\n---\nBe useful.`;
@@ -250,6 +250,18 @@ test("persists a recoverable run report", () => {
   assert.match(content, /## Report\n\nLooks good\./);
 });
 
+test("persists every child session path in the run report", () => {
+  const directory = mkdtempSync(join(tmpdir(), "lofi-subagent-session-paths-"));
+  const report = startRunReport(directory, "reviewer", "Review this", "/project");
+  recordRunSession(report, "/sessions/first.jsonl");
+  recordRunSession(report, "/sessions/fallback.jsonl");
+
+  assert.deepEqual(report.sessionPaths, ["/sessions/first.jsonl", "/sessions/fallback.jsonl"]);
+  const content = readFileSync(report.filePath, "utf8");
+  assert.match(content, /Child session: \/sessions\/first\.jsonl/);
+  assert.match(content, /Child session: \/sessions\/fallback\.jsonl/);
+});
+
 test("persists paused questions and resumes the same report", () => {
   const directory = mkdtempSync(join(tmpdir(), "lofi-subagent-paused-report-"));
   const report = startRunReport(directory, "worker", "Implement this", "/project");
@@ -365,6 +377,24 @@ test("tracks foreground runs and forwards cancellation", () => {
   assert.equal(runs.get(report.id), run);
   parent.abort();
   assert.equal(run.signal.aborted, true);
+});
+
+test("cancelling a promise-driven wait leaves its detached run alive", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "lofi-subagent-wait-"));
+  const report = startRunReport(directory, "reviewer", "Review this", "/project");
+  const run = trackRun(new Map(), report, undefined, true);
+  let complete!: () => void;
+  run.promise = new Promise<void>((resolve) => { complete = resolve; });
+  const waiter = new AbortController();
+  const cancelledWait = waitForRun(run, waiter.signal);
+
+  waiter.abort();
+  await assert.rejects(cancelledWait, { name: "AbortError" });
+  assert.equal(run.signal.aborted, false);
+
+  const survivingWait = waitForRun(run);
+  complete();
+  await survivingWait;
 });
 
 test("preflights every settings override before renaming an agent", () => {

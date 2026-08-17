@@ -17,6 +17,7 @@ export interface RunReport {
   questions?: string[];
   output?: string;
   error?: string;
+  sessionPaths: string[];
   filePath: string;
 }
 
@@ -92,7 +93,7 @@ export function startRunReport(directory: string, agent: string, task: string, c
   const startedAt = new Date().toISOString();
   const id = randomUUID();
   const filePath = join(directory, `${startedAt.replaceAll(":", "-")}-${id}.md`);
-  const report = { id, agent, task, cwd, status: "running" as const, startedAt, filePath };
+  const report = { id, agent, task, cwd, status: "running" as const, startedAt, sessionPaths: [], filePath };
   saveRunReport(report);
   return report;
 }
@@ -108,6 +109,7 @@ export function saveRunReport(report: RunReport): void {
     ...(report.finishedAt ? [`- Finished: ${report.finishedAt}`] : []),
     ...(report.model ? [`- Model: ${report.model}`] : []),
     `- Working directory: ${report.cwd}`,
+    ...report.sessionPaths.map((path) => `- Child session: ${path}`),
     "",
     "## Task",
     "",
@@ -120,6 +122,12 @@ export function saveRunReport(report: RunReport): void {
   const temporaryPath = `${report.filePath}.tmp`;
   writeFileSync(temporaryPath, `${lines.join("\n").replace(/\s+$/, "")}\n`);
   renameSync(temporaryPath, report.filePath);
+}
+
+export function recordRunSession(report: RunReport, sessionPath: string): void {
+  if (report.sessionPaths.includes(sessionPath)) return;
+  report.sessionPaths.push(sessionPath);
+  saveRunReport(report);
 }
 
 export function pauseRunReport(report: RunReport, model: string, questions: string[]): void {

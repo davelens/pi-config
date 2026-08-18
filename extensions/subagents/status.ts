@@ -8,7 +8,7 @@ import {
   type TUI,
 } from "@earendil-works/pi-tui";
 import type { RunReport } from "./reports.ts";
-import { streamJump, type RunMessage } from "./run-stream.ts";
+import { formatRunUsage, streamJump, type RunMessage } from "./run-stream.ts";
 
 export interface StatusRun {
   report: RunReport;
@@ -25,6 +25,18 @@ interface StatusOptions {
 function pad(text: string, width: number): string {
   const truncated = truncateToWidth(text, width, "…");
   return truncated + " ".repeat(Math.max(0, width - visibleWidth(truncated)));
+}
+
+function padBetween(left: string, right: string, width: number): string {
+  if (width <= 0) return "";
+  const available = width - 1;
+  const clippedRight = truncateToWidth(right, available, "");
+  const rightWidth = visibleWidth(clippedRight);
+  const clippedLeft = truncateToWidth(left, Math.max(0, available - rightWidth - 1), "…");
+  return clippedLeft
+    + " ".repeat(Math.max(0, available - visibleWidth(clippedLeft) - rightWidth))
+    + clippedRight
+    + " ";
 }
 
 function stringify(value: unknown): string {
@@ -160,15 +172,16 @@ export class SubagentStatus implements Component {
     this.keepSelectionVisible(bodyHeight);
 
     const title = run ? `${run.report.agent} · ${run.report.status} · ${run.report.id.slice(0, 8)}` : "No run";
+    const usage = run ? this.options.theme.fg("dim", formatRunUsage(run.messages)) : "";
     const lines = hasSidebar
       ? [
           border("╭") + activeBorder("sidebar", "─".repeat(sidebarWidth)) + border("┬") + activeBorder("content", "─".repeat(contentWidth)) + border("╮"),
-          border("│") + pad(`${this.focus === "sidebar" ? "▶ " : "  "}Runs`, sidebarWidth) + border("│") + pad(`${this.focus === "content" ? "▶ " : "  "}${title}`, contentWidth) + border("│"),
+          border("│") + pad(`${this.focus === "sidebar" ? "▶ " : "  "}Runs`, sidebarWidth) + border("│") + padBetween(`${this.focus === "content" ? "▶ " : "  "}${title}`, usage, contentWidth) + border("│"),
           border("├") + border("─".repeat(sidebarWidth)) + border("┼") + border("─".repeat(contentWidth)) + border("┤"),
         ]
       : [
           border("╭") + activeBorder("content", "─".repeat(innerWidth)) + border("╮"),
-          border("│") + pad(`▶ ${title}`, innerWidth) + border("│"),
+          border("│") + padBetween(`▶ ${title}`, usage, innerWidth) + border("│"),
           border("├") + border("─".repeat(innerWidth)) + border("┤"),
         ];
 

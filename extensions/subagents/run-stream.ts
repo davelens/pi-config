@@ -9,6 +9,40 @@ export interface RunMessage {
   errorMessage?: string;
   status?: "running" | "completed" | "failed";
   timestamp?: number;
+  usage?: {
+    input?: number;
+    output?: number;
+    cost?: { total?: number };
+  };
+}
+
+export interface RunUsage {
+  input: number;
+  output: number;
+  cost: number;
+}
+
+function formatTokens(count: number): string {
+  if (count < 1000) return String(count);
+  if (count < 10_000) return `${(count / 1000).toFixed(1)}k`;
+  if (count < 1_000_000) return `${Math.round(count / 1000)}k`;
+  return `${(count / 1_000_000).toFixed(1)}M`;
+}
+
+export function runUsage(messages: RunMessage[]): RunUsage {
+  return messages.reduce((total, message) => {
+    if (message.role !== "assistant" && message.role !== "toolResult") return total;
+    total.input += message.usage?.input ?? 0;
+    total.output += message.usage?.output ?? 0;
+    total.cost += message.usage?.cost?.total ?? 0;
+    return total;
+  }, { input: 0, output: 0, cost: 0 });
+}
+
+export function formatRunUsage(messages: RunMessage[]): string {
+  const usage = runUsage(messages);
+  const cost = usage.cost.toFixed(4).replace(/0$/, "");
+  return `↑${formatTokens(usage.input)} · ↓${formatTokens(usage.output)} · $${cost}`;
 }
 
 export interface MessageEvent {

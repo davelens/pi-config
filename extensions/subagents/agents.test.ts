@@ -17,7 +17,7 @@ import {
 } from "./agent-files.ts";
 import { acquireMutationLock, finishRunReport, pauseRunReport, pruneRunReports, recordRunSession, resumeRunReport, startRunReport } from "./reports.ts";
 import { buildDoctorReport } from "./doctor-report.ts";
-import { captureRunMessage, streamJump, trackRun, waitForRun, type RunMessage } from "./run-stream.ts";
+import { captureRunMessage, formatRunUsage, runUsage, streamJump, trackRun, waitForRun, type RunMessage } from "./run-stream.ts";
 import { formatParentRequest, formatResumePrompt } from "./supervision.ts";
 
 const definition = (name: string, description: string) => `---\nname: ${name}\ndescription: ${description}\ntools: read, grep\nthinking: low\n---\nBe useful.`;
@@ -344,6 +344,19 @@ test("captures live messages and in-flight tool output", () => {
     isError: false,
     status: "completed",
   });
+});
+
+test("totals and formats live run usage", () => {
+  const messages: RunMessage[] = [
+    { role: "assistant", usage: { input: 31_500, output: 2_250, cost: { total: 0.2946 } } },
+    { role: "toolResult", usage: { input: 500, output: 50, cost: { total: 0.0004 } } },
+    { role: "user", usage: { input: 99, output: 99, cost: { total: 99 } } },
+  ];
+
+  const usage = runUsage(messages);
+  assert.deepEqual({ input: usage.input, output: usage.output }, { input: 32_000, output: 2_300 });
+  assert.equal(Math.abs(usage.cost - 0.295) < Number.EPSILON, true);
+  assert.equal(formatRunUsage(messages), "↑32k · ↓2.3k · $0.295");
 });
 
 test("maps stream jump keys", () => {

@@ -31,7 +31,7 @@ Run `/subagents` to open the two-pane manager:
 - `*` marks a managed definition that differs from its shipped default.
 - `esc` closes the manager.
 
-Run `/subagents-status` while at least one subagent is active to inspect every run started in the current Pi process, including foreground runs and completed siblings. The popup follows the latest message by default; use `j`/`k` to scroll, `{`/`}` to jump ten rows, `gg`/`G` to jump to the top/bottom, and `ctrl+n`/`ctrl+p` or the sidebar to switch runs. A single run uses the full panel without a sidebar. If nothing is running, Pi shows an inline message instead of opening the popup.
+Run `/subagents-status` while at least one subagent is active to inspect every run started in the current Pi process, including foreground runs and completed siblings. The selected run's live input tokens, output tokens, and cost appear at the top right. The popup follows the latest message by default; use `j`/`k` to scroll, `{`/`}` to jump ten rows, `gg`/`G` to jump to the top/bottom, and `ctrl+n`/`ctrl+p` or the sidebar to switch runs. A single run uses the full panel without a sidebar. If nothing is running, Pi shows an inline message instead of opening the popup.
 
 Run `/subagents-doctor` for the same style of scrollable popup covering malformed definitions, unavailable models, invalid tools, configured or missing skills, Pi skill diagnostics, guardrails, and active runs.
 

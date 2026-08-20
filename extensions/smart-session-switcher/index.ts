@@ -1,4 +1,5 @@
 import {
+  copyToClipboard,
   SessionManager,
   type ExtensionAPI,
   type ExtensionCommandContext,
@@ -122,6 +123,7 @@ class SwitchSessionComponent implements Component {
     private currentSessionPath: string | undefined,
     private theme: ExtensionCommandContext["ui"]["theme"],
     private getRows: () => number,
+    private requestRender: () => void,
     private persistName: (sessionPath: string, nextName: string) => string,
     private done: (result: SwitchResult) => void,
   ) {
@@ -293,6 +295,8 @@ class SwitchSessionComponent implements Component {
       this.done({ action: "cancel" });
     } else if (matchesKey(data, "ctrl+r")) {
       this.startRename();
+    } else if (matchesKey(data, "ctrl+y")) {
+      this.copySelectedSessionId();
     } else if (matchesKey(data, "ctrl+d")) {
       this.startDeleteConfirmation();
     } else {
@@ -326,7 +330,7 @@ class SwitchSessionComponent implements Component {
   }
 
   private footerLegend(width: number): string {
-    return this.theme.fg("dim", truncateToWidth("Rename session: ctrl+r  ∙  Delete session: ctrl+d", width, "…"));
+    return this.theme.fg("dim", truncateToWidth("Rename session: ctrl+r  ∙  Copy full ID: ctrl+y  ∙  Delete session: ctrl+d", width, "…"));
   }
 
   private columnHeader(width: number): string {
@@ -381,6 +385,20 @@ class SwitchSessionComponent implements Component {
     if (!selected) return;
     this.renameInput.setValue(wordLimit(selected.name || selected.firstMessage));
     this.mode = "rename";
+  }
+
+  private copySelectedSessionId(): void {
+    const selected = this.selectedSession();
+    if (!selected) return;
+    void copyToClipboard(selected.id)
+      .then(() => {
+        this.status = "Copied full session ID";
+        this.requestRender();
+      })
+      .catch((error) => {
+        this.status = `Copy failed: ${error instanceof Error ? error.message : String(error)}`;
+        this.requestRender();
+      });
   }
 
   private finishRename(value: string): void {
@@ -454,6 +472,7 @@ async function showSwitchSessionUi(sessions: SessionInfo[], ctx: ExtensionComman
       ctx.sessionManager.getSessionFile(),
       theme,
       () => tui.terminal.rows,
+      () => tui.requestRender(),
       (sessionPath, nextName) => persistSessionName(sessionPath, nextName, ctx.sessionManager.getSessionFile(), (name) => pi.setSessionName(name)),
       done,
     );

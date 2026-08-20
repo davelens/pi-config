@@ -47,6 +47,7 @@ The smart switcher:
 - supports `Ctrl+n`/`Ctrl+p` to move down/up
 - shows up to 8 session items at once
 - supports `Ctrl+r` to rename the highlighted session
+- supports `Ctrl+y` to copy the highlighted session's full ID to the clipboard
 - supports `Ctrl+d` to open a delete confirmation dialog for the highlighted session history
 
 `/resume` remains Pi's built-in session picker; extensions cannot override that literal command from this config repo.

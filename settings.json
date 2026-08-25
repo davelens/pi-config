@@ -19,7 +19,8 @@
     "npm:pi-mcp-adapter",
     "npm:pi-rewind",
     "npm:pi-tool-display",
-    "npm:pi-powerline"
+    "npm:pi-powerline",
+    "./extensions/session-breadcrumb/index.ts"
   ],
   "theme": "catppuccin-mocha",
   "terminal": {

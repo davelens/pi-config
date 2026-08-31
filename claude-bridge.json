@@ -3,7 +3,7 @@
     "enabled": false
   },
   "provider": {
-    "pathToClaudeCodeExecutable": "/usr/bin/claude"
+    "pathToClaudeCodeExecutable": "/home/davelens/.local/share/mise/installs/claude-code/2.1.251/claude"
   },
   "startupNoticeShown": "2026-07-29"
 }

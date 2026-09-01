@@ -72,8 +72,8 @@
           }
         },
         {
-          "id": "qwen3.6-27b-q6",
-          "name": "Qwen 3.6 27B (Q6_K_XL)",
+          "id": "qwen3.8-27b-q6",
+          "name": "Qwen 3.8 27B (Q6_K_XL)",
           "reasoning": true,
           "thinkingLevelMap": {
             "minimal": null,
@@ -91,8 +91,8 @@
           }
         },
         {
-          "id": "qwen3.6-35b-a3b-q4",
-          "name": "Qwen 3.6 35B A3B (Q4_K_M)",
+          "id": "qwen3.8-flash-next-iq3",
+          "name": "Qwen 3.8 Flash Next (IQ3_XXS)",
           "reasoning": true,
           "thinkingLevelMap": {
             "minimal": null,
@@ -108,14 +108,6 @@
           "compat": {
             "thinkingFormat": "qwen-chat-template"
           }
-        },
-        {
-          "id": "qwen3-coder-next-q8",
-          "name": "Qwen3 Coder Next (Q8_0)",
-          "reasoning": false,
-          "input": ["text"],
-          "contextWindow": 131072,
-          "maxTokens": 65536
         }
       ]
     }

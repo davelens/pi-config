@@ -1,7 +1,8 @@
 ---
 name: oracle
 description: Deep second opinion on a risky decision or diagnosis
-model: openai-codex/gpt-5.6-sol
+model: claude-bridge/claude-fable-5
+fallbackModels: openai-codex/gpt-6-astra
 thinking: xhigh
 skills: project-conventions, ponytail, codebase-design
 tools: read, grep, find, ls

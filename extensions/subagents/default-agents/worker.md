@@ -1,7 +1,7 @@
 ---
 name: worker
 description: Minimal implementation of an approved task
-model: openai-codex/gpt-5.6-sol
+model: openai-codex/gpt-6-astra
 thinking: high
 skills: project-conventions, ponytail, diagnosing-bugs, tdd, docs-reference
 tools: read, grep, find, ls, bash, edit, write

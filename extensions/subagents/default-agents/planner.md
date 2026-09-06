@@ -1,7 +1,7 @@
 ---
 name: planner
 description: Concrete implementation plans from requirements and code context
-model: openai-codex/gpt-5.6-sol
+model: openai-codex/gpt-6-astra
 thinking: high
 skills: project-conventions, ponytail, codebase-design
 tools: read, grep, find, ls

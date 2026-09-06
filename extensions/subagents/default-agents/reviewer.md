@@ -1,7 +1,8 @@
 ---
 name: reviewer
 description: Evidence-based review of code, diffs, or plans
-model: openai-codex/gpt-5.6-sol
+model: claude-bridge/claude-fable-5
+fallbackModels: openai-codex/gpt-6-astra
 thinking: high
 skills: project-conventions, ponytail-review
 tools: read, grep, find, ls, git_inspect

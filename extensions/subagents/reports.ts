@@ -124,9 +124,9 @@ export function saveRunReport(report: RunReport): void {
   renameSync(temporaryPath, report.filePath);
 }
 
-export function recordRunSession(report: RunReport, sessionPath: string): void {
-  if (report.sessionPaths.includes(sessionPath)) return;
-  report.sessionPaths.push(sessionPath);
+export function recordRunSession(report: RunReport, sessionPath: string, model: string): void {
+  report.model = model;
+  if (!report.sessionPaths.includes(sessionPath)) report.sessionPaths.push(sessionPath);
   saveRunReport(report);
 }
 

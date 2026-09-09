@@ -160,7 +160,7 @@ export class SubagentStatus implements Component {
     const hasSidebar = runs.length > 1;
     const sidebarWidth = hasSidebar ? Math.max(1, Math.min(Math.floor(innerWidth * 0.3), innerWidth - 2)) : 0;
     const contentWidth = innerWidth - sidebarWidth - (hasSidebar ? 1 : 0);
-    const bodyHeight = Math.max(1, height - 6);
+    const bodyHeight = Math.max(1, height - 7);
     const border = (text: string) => this.options.theme.fg("border", text);
     const activeBorder = (section: "sidebar" | "content", text: string) =>
       this.options.theme.fg(this.focus === section ? "accent" : "border", text);
@@ -173,15 +173,18 @@ export class SubagentStatus implements Component {
 
     const title = run ? `${run.report.agent} · ${run.report.status} · ${run.report.id.slice(0, 8)}` : "No run";
     const usage = run ? this.options.theme.fg("dim", formatRunUsage(run.messages)) : "";
+    const model = this.options.theme.fg("muted", `Model: ${run?.report.model ?? "starting…"}`);
     const lines = hasSidebar
       ? [
           border("╭") + activeBorder("sidebar", "─".repeat(sidebarWidth)) + border("┬") + activeBorder("content", "─".repeat(contentWidth)) + border("╮"),
           border("│") + pad(`${this.focus === "sidebar" ? "▶ " : "  "}Runs`, sidebarWidth) + border("│") + padBetween(`${this.focus === "content" ? "▶ " : "  "}${title}`, usage, contentWidth) + border("│"),
+          border("│") + pad("", sidebarWidth) + border("│") + pad(`  ${model}`, contentWidth) + border("│"),
           border("├") + border("─".repeat(sidebarWidth)) + border("┼") + border("─".repeat(contentWidth)) + border("┤"),
         ]
       : [
           border("╭") + activeBorder("content", "─".repeat(innerWidth)) + border("╮"),
           border("│") + padBetween(`▶ ${title}`, usage, innerWidth) + border("│"),
+          border("│") + pad(`  ${model}`, innerWidth) + border("│"),
           border("├") + border("─".repeat(innerWidth)) + border("┤"),
         ];
 

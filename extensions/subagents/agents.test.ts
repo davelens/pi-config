@@ -253,13 +253,18 @@ test("persists a recoverable run report", () => {
 test("persists every child session path in the run report", () => {
   const directory = mkdtempSync(join(tmpdir(), "lofi-subagent-session-paths-"));
   const report = startRunReport(directory, "reviewer", "Review this", "/project");
-  recordRunSession(report, "/sessions/first.jsonl");
-  recordRunSession(report, "/sessions/fallback.jsonl");
+  recordRunSession(report, "/sessions/first.jsonl", "openai/primary");
+  assert.equal(report.model, "openai/primary");
+  assert.match(readFileSync(report.filePath, "utf8"), /Model: openai\/primary/);
+  recordRunSession(report, "/sessions/fallback.jsonl", "openai/fallback");
+  assert.equal(report.status, "running");
+  assert.equal(report.model, "openai/fallback");
 
   assert.deepEqual(report.sessionPaths, ["/sessions/first.jsonl", "/sessions/fallback.jsonl"]);
   const content = readFileSync(report.filePath, "utf8");
   assert.match(content, /Child session: \/sessions\/first\.jsonl/);
   assert.match(content, /Child session: \/sessions\/fallback\.jsonl/);
+  assert.match(content, /Model: openai\/fallback/);
 });
 
 test("persists paused questions and resumes the same report", () => {

@@ -194,7 +194,7 @@ function resolveModel(modelName: string | undefined, agent: AgentConfig, ctx: Ex
   return model;
 }
 
-async function runAttempt(agent: AgentConfig, task: string, cwd: string, modelName: string | undefined, signal: AbortSignal, timeoutMs: number, ctx: ExtensionContext, pi: ExtensionAPI, onSession: (path: string) => void, onEvent?: (event: AgentSessionEvent) => void): Promise<AgentResult> {
+async function runAttempt(agent: AgentConfig, task: string, cwd: string, modelName: string | undefined, signal: AbortSignal, timeoutMs: number, ctx: ExtensionContext, pi: ExtensionAPI, onSession: (path: string, model: string) => void, onEvent?: (event: AgentSessionEvent) => void): Promise<AgentResult> {
   const model = resolveModel(modelName, agent, ctx);
   const modelRuntime = await ModelRuntime.create({ refreshOnCreate: false, signal });
   const provider = ctx.modelRegistry.getProvider(model.provider);
@@ -284,10 +284,10 @@ async function runAttempt(agent: AgentConfig, task: string, cwd: string, modelNa
     sessionManager,
     settingsManager,
   });
-  const sessionPath = sessionManager.getSessionFile();
-  if (sessionPath) onSession(sessionPath);
-  const unsubscribe = onEvent ? session.subscribe(onEvent) : undefined;
   const modelId = `${model.provider}/${model.id}`;
+  const sessionPath = sessionManager.getSessionFile();
+  if (sessionPath) onSession(sessionPath, modelId);
+  const unsubscribe = onEvent ? session.subscribe(onEvent) : undefined;
   let disposed = false;
   const dispose = () => {
     if (disposed) return;
@@ -328,7 +328,7 @@ async function runAttempt(agent: AgentConfig, task: string, cwd: string, modelNa
   }
 }
 
-async function runAgent(agent: AgentConfig, task: string, cwd: string, signal: AbortSignal, ctx: ExtensionContext, pi: ExtensionAPI, onSession: (path: string) => void, onEvent?: (event: AgentSessionEvent) => void): Promise<AgentResult> {
+async function runAgent(agent: AgentConfig, task: string, cwd: string, signal: AbortSignal, ctx: ExtensionContext, pi: ExtensionAPI, onSession: (path: string, model: string) => void, onEvent?: (event: AgentSessionEvent) => void): Promise<AgentResult> {
   const candidates = [...new Set([agent.model, ...(agent.fallbackModels ?? [])])];
   const errors: string[] = [];
   const writes = agent.tools.some((tool) => tool === "bash" || tool === "edit" || tool === "write");
@@ -628,8 +628,9 @@ export default function subagents(pi: ExtensionAPI) {
       const activeRun = trackRun(runs, report, signal, params.async === true);
       if (releaseLock) releases.set(report.id, releaseLock);
       refreshStatus?.();
-      const execute = () => executeRun(activeRun, activeRun.signal, () => runAgent(agent, params.task!, ctx.cwd, activeRun.signal, ctx, pi, (sessionPath) => {
-        recordRunSession(report, sessionPath);
+      const execute = () => executeRun(activeRun, activeRun.signal, () => runAgent(agent, params.task!, ctx.cwd, activeRun.signal, ctx, pi, (sessionPath, model) => {
+        recordRunSession(report, sessionPath, model);
+        refreshStatus?.();
       }, (event) => {
         if (captureRunMessage(activeRun.messages, event)) refreshStatus?.();
       }));

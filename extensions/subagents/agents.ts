@@ -62,6 +62,7 @@ export function parseAgent(content: string, filePath = ""): AgentConfig | undefi
     .filter(Boolean);
   const invalidTools = tools.filter((tool) => !SUPPORTED_TOOLS.has(tool));
   const skills = (fields.get("skills") ?? "").split(",").map((skill) => skill.trim()).filter(Boolean);
+  const fallbackModels = [...new Set((fields.get("fallbackModels") ?? "").split(",").map((model) => model.trim()).filter(Boolean))];
   const warnings = thinking && !THINKING_LEVELS.includes(thinking as ThinkingLevel)
     ? [`Invalid thinking level '${thinking}'${filePath ? ` in ${filePath}` : ""}`]
     : [];
@@ -70,6 +71,7 @@ export function parseAgent(content: string, filePath = ""): AgentConfig | undefi
     description,
     tools,
     ...(fields.get("model") ? { model: fields.get("model") } : {}),
+    ...(fallbackModels.length ? { fallbackModels } : {}),
     ...(THINKING_LEVELS.includes(thinking as ThinkingLevel) ? { thinking: thinking as ThinkingLevel } : {}),
     ...(skills.length ? { skills } : {}),
     ...(invalidTools.length ? { invalidTools } : {}),

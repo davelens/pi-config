@@ -49,6 +49,28 @@ test("parses definitions and applies settings overrides in order", () => {
   assert.equal(parsed?.thinking, "low");
 });
 
+test("loads Markdown fallback models for runtime and the manager, with settings precedence", () => {
+  const root = mkdtempSync(join(tmpdir(), "lofi-subagent-markdown-fallbacks-"));
+  const settings = join(root, "settings.json");
+  const options = { agentsDirectory: root, settingsPaths: [settings] };
+  for (const [value, expected] of [
+    ["openai-codex/gpt-6-astra", ["openai-codex/gpt-6-astra"]],
+    ['" openai/first, openai/second, , openai/first "', ["openai/first", "openai/second"]],
+  ] as const) {
+    const content = definition("oracle", "second opinion").replace("thinking: low", `fallbackModels: ${value}\nthinking: low`);
+    writeFileSync(join(root, "oracle.md"), content);
+    const agent = discoverAgents(options)[0]!;
+    assert.deepEqual(agent.fallbackModels, expected);
+    assert.ok(withEffectiveSettings(content, agent).includes(`fallbackModels: "${expected.join(", ")}"`));
+  }
+
+  writeFileSync(settings, JSON.stringify({ subagents: { agentOverrides: { oracle: { fallbackModels: ["openai/override"] } } } }));
+  assert.deepEqual(discoverAgents(options)[0]?.fallbackModels, ["openai/override"]);
+  writeFileSync(settings, JSON.stringify({ subagents: { agentOverrides: { oracle: { fallbackModels: [] } } } }));
+  assert.deepEqual(discoverAgents(options)[0]?.fallbackModels, []);
+  assert.equal(parseAgent(definition("oracle", "second opinion"))?.fallbackModels, undefined);
+});
+
 test("resolves configurable aliases with project precedence", () => {
   const root = mkdtempSync(join(tmpdir(), "lofi-subagent-aliases-"));
   const agentsDirectory = join(root, "agents");

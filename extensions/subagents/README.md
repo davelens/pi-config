@@ -81,7 +81,7 @@ tools: read, grep, find, ls
 You are a fast codebase scout. Inspect only and return exact evidence.
 ```
 
-Supported frontmatter is deliberately limited to `name`, `description`, `model`, `thinking`, comma-separated `fallbackModels`, comma-separated `skills`, and comma-separated tools. Omit `model` to inherit the parent model. Set `fallbackModels: openai-codex/gpt-6-astra` for one fallback, or separate multiple models with commas. Settings overrides take precedence over frontmatter. Configure timeouts through `settings.json`. Only skills named on that agent are exposed to the child; Pi resolves them through its normal trusted global, project, package, and configured skill paths. Configured skills require the `read` tool, and a missing skill blocks the run. `pi-subagents` is always excluded because children cannot delegate. Children inherit project context files and the guardrails policy extension, but not the parent conversation, ambient skills, other extensions, or session history; tasks must be self-contained. Their normal system prompt is preserved and the role prompt is appended, so tool and environment guidance stays consistent across providers.
+Supported frontmatter is deliberately limited to `name`, `description`, `model`, `thinking`, comma-separated `fallbackModels`, comma-separated `skills`, and comma-separated tools. Omit `model` to inherit the parent model. Set `fallbackModels: openai-codex/gpt-6-astra` for one fallback, or separate multiple models with commas. Settings overrides take precedence over frontmatter. Configure timeouts through `settings.json`. Only skills named on that agent are exposed to the child; Pi resolves them through its normal trusted global, project, package, and configured skill paths. Configured skills require the `read` tool, and a missing skill blocks the run. `pi-subagents` is always excluded because children cannot delegate. Children inherit project context files and the guardrails policy extension, but not the parent conversation, ambient skills, unrelated extensions, or session history; tasks must be self-contained. Claude Bridge attempts also load its installed extension from `git/github.com/elidickinson/pi-claude-bridge/src/index.ts` under Pi's agent directory so its hooks capture the child's own prompt and skills; copying the provider alone does not register those hooks. Their normal system prompt is preserved and the role prompt is appended, so tool and environment guidance stays consistent across providers.
 
 Restoring defaults deletes the managed agent definitions and recopies `default-agents/*.md`. Configuration overrides in `settings.json` are not deleted. The shipped `diff-summarizer` is a cheap read-only orientation pass for the unstaged diff, staged diff, untracked files, tests, and review hotspots.
 
@@ -92,4 +92,7 @@ Every run immediately creates a Markdown report under `~/.config/agents/pi/repor
 ```bash
 (cd extensions/subagents && npm test)
 node tests/subagents-status.test.mjs
+node tests/subagents-bridge.test.mjs
 ```
+
+The bridge check exercises the actual subagent runner and Claude Bridge prompt capture offline, stopping before Claude Code starts. It requires the configured Bridge and guardrails packages to be installed.

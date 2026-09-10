@@ -36,6 +36,7 @@ const AGENTS_DIRECTORY = join(homedir(), ".config", "agents", "pi");
 const REPORTS_DIRECTORY = join(AGENTS_DIRECTORY, "reports");
 const CHILD_SESSIONS_DIRECTORY = join(AGENTS_DIRECTORY, "subagent-sessions");
 const GUARDRAILS_EXTENSION = join(getAgentDir(), "npm", "node_modules", "@aliou", "pi-guardrails", "extensions", "guardrails", "index.ts");
+const CLAUDE_BRIDGE_EXTENSION = join(getAgentDir(), "git", "github.com", "elidickinson", "pi-claude-bridge", "src", "index.ts");
 const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
 const SUBAGENT_BOUNDARIES = `# Boundaries
 Return only the requested deliverable and blockers, as concisely as correctness allows. Do one pass, stop when the task is answered, and do not expand scope, propose follow-up work, or continue searching for additional issues unless the task explicitly requires it.
@@ -211,7 +212,7 @@ async function runAttempt(agent: AgentConfig, task: string, cwd: string, modelNa
     cwd,
     agentDir: getAgentDir(),
     settingsManager,
-    additionalExtensionPaths: [GUARDRAILS_EXTENSION],
+    additionalExtensionPaths: [GUARDRAILS_EXTENSION, ...(model.provider === "claude-bridge" ? [CLAUDE_BRIDGE_EXTENSION] : [])],
     noExtensions: true,
     noSkills: selectedSkills.size === 0,
     noPromptTemplates: true,
@@ -228,7 +229,7 @@ async function runAttempt(agent: AgentConfig, task: string, cwd: string, modelNa
   await resourceLoader.reload();
   applyChildRuntimeSettings(settingsManager);
   const extensionErrors = resourceLoader.getExtensions().errors;
-  if (extensionErrors.length) throw new Error(`Could not load subagent guardrails: ${extensionErrors.map(({ error }) => error).join("; ")}`);
+  if (extensionErrors.length) throw new Error(`Could not load subagent extensions: ${extensionErrors.map(({ path, error }) => `${path}: ${error}`).join("; ")}`);
   const loadedSkills = new Set(resourceLoader.getSkills().skills.map((skill) => skill.name));
   const missingSkills = [...selectedSkills].filter((skill) => !loadedSkills.has(skill));
   if (missingSkills.length) throw new Error(`Skills not found for ${agent.name}: ${missingSkills.join(", ")}`);

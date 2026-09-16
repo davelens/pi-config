@@ -69,17 +69,19 @@ export function withEffectiveSettings(content: string, agent: {
   model?: string;
   fallbackModels?: string[];
   thinking?: string;
+  timeoutMs?: number;
   skills?: string[];
   aliases?: string[];
   tools: string[];
 }): string {
   const parts = agentDefinitionParts(content);
   let frontmatter = parts.frontmatter;
-  const fields = new Map<string, string | undefined>([
+  const fields = new Map<string, string | number | undefined>([
     ["description", agent.description],
     ["model", agent.model],
     ["fallbackModels", agent.fallbackModels?.join(", ")],
     ["thinking", agent.thinking],
+    ["timeoutMs", agent.timeoutMs],
     ["skills", agent.skills?.join(", ")],
     ["aliases", agent.aliases?.join(", ")],
     ["tools", agent.tools.length ? agent.tools.join(", ") : "[]"],

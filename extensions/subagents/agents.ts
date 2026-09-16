@@ -41,6 +41,10 @@ function unquote(value: string): string {
     : value;
 }
 
+function isValidTimeout(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 && value <= 2_147_483_647;
+}
+
 export function parseAgent(content: string, filePath = ""): AgentConfig | undefined {
   const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
   if (!match) return;
@@ -56,6 +60,7 @@ export function parseAgent(content: string, filePath = ""): AgentConfig | undefi
   if (!name || !description) return;
 
   const thinking = fields.get("thinking");
+  const timeoutMs = Number(fields.get("timeoutMs"));
   const tools = (fields.get("tools") ?? "read, grep, find, ls")
     .split(",")
     .map((tool) => tool.trim())
@@ -66,6 +71,9 @@ export function parseAgent(content: string, filePath = ""): AgentConfig | undefi
   const warnings = thinking && !THINKING_LEVELS.includes(thinking as ThinkingLevel)
     ? [`Invalid thinking level '${thinking}'${filePath ? ` in ${filePath}` : ""}`]
     : [];
+  if (fields.has("timeoutMs") && !isValidTimeout(timeoutMs)) {
+    warnings.push(`Invalid timeoutMs '${fields.get("timeoutMs")}'${filePath ? ` in ${filePath}` : ""}: expected an integer from 1 to 2147483647`);
+  }
   return {
     name,
     description,
@@ -73,6 +81,7 @@ export function parseAgent(content: string, filePath = ""): AgentConfig | undefi
     ...(fields.get("model") ? { model: fields.get("model") } : {}),
     ...(fallbackModels.length ? { fallbackModels } : {}),
     ...(THINKING_LEVELS.includes(thinking as ThinkingLevel) ? { thinking: thinking as ThinkingLevel } : {}),
+    ...(isValidTimeout(timeoutMs) ? { timeoutMs } : {}),
     ...(skills.length ? { skills } : {}),
     ...(invalidTools.length ? { invalidTools } : {}),
     ...(warnings.length ? { warnings } : {}),
@@ -126,7 +135,7 @@ function applyOverrides(agents: Map<string, AgentConfig>, overrides: Record<stri
       if (override.thinking !== undefined) next.warnings = [...(agent.warnings ?? []), `Invalid thinking override '${override.thinking}'`];
       delete next.thinking;
     }
-    if (typeof next.timeoutMs !== "number" || !Number.isFinite(next.timeoutMs) || next.timeoutMs <= 0 || next.timeoutMs > 2_147_483_647) delete next.timeoutMs;
+    if (!isValidTimeout(next.timeoutMs)) delete next.timeoutMs;
     if (override.fallbackModels !== undefined) {
       if (Array.isArray(override.fallbackModels) && override.fallbackModels.every((model) => typeof model === "string")) {
         next.fallbackModels = [...new Set(override.fallbackModels.map((model) => model.trim()).filter(Boolean))];

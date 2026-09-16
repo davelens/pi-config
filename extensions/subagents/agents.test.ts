@@ -71,6 +71,42 @@ test("loads Markdown fallback models for runtime and the manager, with settings 
   assert.equal(parseAgent(definition("oracle", "second opinion"))?.fallbackModels, undefined);
 });
 
+test("loads and validates Markdown timeouts with settings precedence and manager rendering", () => {
+  const root = mkdtempSync(join(tmpdir(), "lofi-subagent-timeouts-"));
+  const globalSettings = join(root, "global.json");
+  const projectSettings = join(root, "project.json");
+  const content = definition("worker", "Build work").replace("thinking: low", "timeoutMs: 1800000\nthinking: low");
+  writeFileSync(join(root, "worker.md"), content);
+  const options = { agentsDirectory: root, settingsPaths: [globalSettings, projectSettings], projectSettingsPath: projectSettings };
+  assert.equal(discoverAgents(options)[0]?.timeoutMs, 1800000);
+  assert.equal(parseAgent(content.replace("1800000", '"600000"'))?.timeoutMs, 600000);
+  assert.equal(parseAgent(content.replace("1800000", "2147483647"))?.timeoutMs, 2147483647);
+  assert.equal(parseAgent(definition("scout", "Inspect"))?.timeoutMs, undefined);
+
+  for (const value of ["", "0", "-1", "1.5", "NaN", "Infinity", "2147483648", "30m"]) {
+    const agent = parseAgent(content.replace("1800000", value))!;
+    assert.equal(agent.timeoutMs, undefined, value);
+    assert.match(agent.warnings?.join("\n") ?? "", /Invalid timeoutMs/);
+  }
+
+  writeFileSync(globalSettings, JSON.stringify({ subagents: { agentOverrides: { worker: { timeoutMs: 600000 } } } }));
+  assert.equal(discoverAgents(options)[0]?.timeoutMs, 600000);
+  writeFileSync(projectSettings, JSON.stringify({ subagents: { agentOverrides: { worker: { timeoutMs: 1200000 } } } }));
+  const agent = discoverAgents(options)[0]!;
+  assert.equal(agent.timeoutMs, 1200000);
+  const rendered = withEffectiveSettings(content, agent);
+  assert.match(rendered, /^timeoutMs: 1200000$/m);
+  assert.equal(parseAgent(rendered)?.timeoutMs, 1200000);
+  assert.doesNotMatch(rendered, /1800000/);
+  assert.doesNotMatch(withEffectiveSettings(content, { description: "Build work", tools: [] }), /timeoutMs:/);
+
+  for (const name of readdirSync(join(import.meta.dirname, "default-agents"))) {
+    if (!name.endsWith(".md")) continue;
+    const shipped = parseAgent(readFileSync(join(import.meta.dirname, "default-agents", name), "utf8"))!;
+    assert.equal(shipped.timeoutMs, shipped.name === "worker" ? 1800000 : undefined, name);
+  }
+});
+
 test("resolves configurable aliases with project precedence", () => {
   const root = mkdtempSync(join(tmpdir(), "lofi-subagent-aliases-"));
   const agentsDirectory = join(root, "agents");

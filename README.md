@@ -63,6 +63,18 @@ The smart switcher:
 - `/notify-phone off` — disable phone notifications
 - `/notify-phone` — show the phone notification mode
 
+## Dotshell agent monitoring
+
+`extensions/dotshell-agent-state/index.ts` auto-loads with this config and
+publishes the current interactive Pi session per PID for dotshell's
+`ai-agents-monitor`. Headless workers publish nothing. Records live under
+`${XDG_RUNTIME_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}}/dotshell-agent-state`;
+`PI_AGENT_STATE_DIR` overrides this for both Pi and dotshell.
+
+Run `/reload` in existing Pi sessions after installing or updating the extension.
+No explicit `extensions` setting or copy in the dotshell repo is needed.
+Run its lifecycle checks with `bash tests/pi_agent_state_test.sh` (Node 22.6+).
+
 ## Adding packages
 
 Edit `settings.json` and add to the `packages` array:

@@ -15,7 +15,7 @@ import {
   restoreDefaultAgents,
   withEffectiveSettings,
 } from "./agent-files.ts";
-import { acquireMutationLock, finishRunReport, pauseRunReport, pruneRunReports, recordRunSession, resumeRunReport, startRunReport } from "./reports.ts";
+import { acquireMutationLock, finishRunReport, pauseRunReport, pruneRunReports, recordRunSession, recordRunWarning, resumeRunReport, startRunReport } from "./reports.ts";
 import { buildDoctorReport } from "./doctor-report.ts";
 import { captureRunMessage, formatRunUsage, runUsage, streamJump, trackRun, waitForRun, type RunMessage } from "./run-stream.ts";
 import { formatParentRequest, formatResumePrompt } from "./supervision.ts";
@@ -311,25 +311,29 @@ test("persists a recoverable run report", () => {
 test("persists every child session path in the run report", () => {
   const directory = mkdtempSync(join(tmpdir(), "lofi-subagent-session-paths-"));
   const report = startRunReport(directory, "reviewer", "Review this", "/project");
-  recordRunSession(report, "/sessions/first.jsonl", "openai/primary");
+  recordRunWarning(report, "Model routing failed, using configured defaults: HTTP 503");
+  recordRunSession(report, "/sessions/first.jsonl", "openai/primary", "high");
   assert.equal(report.model, "openai/primary");
-  assert.match(readFileSync(report.filePath, "utf8"), /Model: openai\/primary/);
-  recordRunSession(report, "/sessions/fallback.jsonl", "openai/fallback");
+  assert.equal(report.thinking, "high");
+  assert.match(readFileSync(report.filePath, "utf8"), /Model: openai\/primary\n- Thinking: high/);
+  recordRunSession(report, "/sessions/fallback.jsonl", "openai/fallback", "low");
   assert.equal(report.status, "running");
   assert.equal(report.model, "openai/fallback");
+  assert.equal(report.thinking, "low");
 
   assert.deepEqual(report.sessionPaths, ["/sessions/first.jsonl", "/sessions/fallback.jsonl"]);
   const content = readFileSync(report.filePath, "utf8");
   assert.match(content, /Child session: \/sessions\/first\.jsonl/);
   assert.match(content, /Child session: \/sessions\/fallback\.jsonl/);
-  assert.match(content, /Model: openai\/fallback/);
+  assert.match(content, /Model: openai\/fallback\n- Thinking: low/);
+  assert.match(content, /- Warning: Model routing failed, using configured defaults: HTTP 503/);
 });
 
 test("persists paused questions and resumes the same report", () => {
   const directory = mkdtempSync(join(tmpdir(), "lofi-subagent-paused-report-"));
   const report = startRunReport(directory, "worker", "Implement this", "/project");
-  pauseRunReport(report, "openai/test", ["Which behavior should win?"]);
-  assert.match(readFileSync(report.filePath, "utf8"), /Status: waiting[\s\S]*Which behavior should win/);
+  pauseRunReport(report, "openai/test", "medium", ["Which behavior should win?"]);
+  assert.match(readFileSync(report.filePath, "utf8"), /Status: waiting[\s\S]*Thinking: medium[\s\S]*Which behavior should win/);
   resumeRunReport(report);
   const resumed = readFileSync(report.filePath, "utf8");
   assert.match(resumed, /Status: running/);
@@ -350,7 +354,7 @@ test("prunes old completed reports without removing active reports", () => {
   }
   const active = startRunReport(directory, "reviewer", "Still running", "/project");
   const waiting = startRunReport(directory, "worker", "Waiting", "/project");
-  pauseRunReport(waiting, "openai/test", ["Continue?"]);
+  pauseRunReport(waiting, "openai/test", "low", ["Continue?"]);
 
   pruneRunReports(directory, 2);
 

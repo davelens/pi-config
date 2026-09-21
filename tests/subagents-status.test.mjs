@@ -34,6 +34,9 @@ status.handleInput("g");
 assert.match(render().join("\n"), /Model: openai\/primary/);
 first.report.model = "openai/fallback";
 assert.match(render().join("\n"), /Model: openai\/fallback/);
+assert.doesNotMatch(render().join("\n"), /Thinking:/);
+first.report.thinking = "low";
+assert.match(render().join("\n"), /Model: openai\/fallback · Thinking: low/);
 runs = [first, run("reviewer", "anthropic/second")];
 status.handleInput("\x0e"); // Ctrl+n selects the next run.
 assert.match(render().join("\n"), /Model: anthropic\/second/);

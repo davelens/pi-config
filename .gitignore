@@ -1,4 +1,6 @@
 auth.json
+typesafe-credentials.json
+typesafe-credentials.json.*.tmp
 bin/
 cache/
 extensions/guardrails.json

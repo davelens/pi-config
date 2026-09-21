@@ -19,22 +19,26 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type, type Static } from "typebox";
-import { agentConfigurationIssues, diagnoseAgentDefinitions, discoverAgents, FORBIDDEN_CHILD_SKILL, resolveAgent, type AgentConfig } from "./agents.ts";
+import { agentConfigurationIssues, diagnoseAgentDefinitions, discoverAgents, FORBIDDEN_CHILD_SKILL, resolveAgent, type AgentConfig, type ThinkingLevel } from "./agents.ts";
 import { ensureDefaultAgents } from "./agent-files.ts";
 import { createContactParentTool } from "./contact-parent.ts";
+import { chooseModel, DECISION_TIMEOUT_MS, decisionCandidates, readDecisionModel, writeDecisionModel } from "./decision-model.ts";
 import { buildDoctorReport } from "./doctor-report.ts";
 import { SubagentsDoctor } from "./doctor.ts";
 import { SubagentManager } from "./manager.ts";
 import { promptChild } from "./prompt-child.ts";
-import { acquireMutationLock, finishRunReport, pauseRunReport, recordRunSession, resumeRunReport, startRunReport, type RunReport } from "./reports.ts";
+import { acquireMutationLock, finishRunReport, pauseRunReport, recordRunSession, recordRunWarning, resumeRunReport, startRunReport, type RunReport } from "./reports.ts";
 import { captureRunMessage, trackRun, waitForRun, type ActiveRun } from "./run-stream.ts";
 import { SubagentStatus } from "./status.ts";
 import { formatParentRequest, formatResumePrompt, type ParentRequest } from "./supervision.ts";
+import { promptTypeSafeKey, readTypeSafeKey, writeTypeSafeKey } from "./typesafe-key.ts";
 
 const DEFAULT_AGENTS = fileURLToPath(new URL("./default-agents", import.meta.url));
 const AGENTS_DIRECTORY = join(homedir(), ".config", "agents", "pi");
 const REPORTS_DIRECTORY = join(AGENTS_DIRECTORY, "reports");
 const CHILD_SESSIONS_DIRECTORY = join(AGENTS_DIRECTORY, "subagent-sessions");
+const GLOBAL_SETTINGS = join(getAgentDir(), "settings.json");
+const TYPESAFE_CREDENTIALS = join(getAgentDir(), "typesafe-credentials.json");
 const GUARDRAILS_EXTENSION = join(getAgentDir(), "npm", "node_modules", "@aliou", "pi-guardrails", "extensions", "guardrails", "index.ts");
 const CLAUDE_BRIDGE_EXTENSION = join(getAgentDir(), "git", "github.com", "elidickinson", "pi-claude-bridge", "src", "index.ts");
 const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
@@ -73,13 +77,27 @@ interface CompletedAgentResult {
   status: "completed";
   output: string;
   model: string;
+  thinking: string;
 }
 
 interface WaitingAgentResult {
   status: "waiting";
   model: string;
+  thinking: string;
   request: ParentRequest;
   continuation: AgentContinuation;
+}
+
+interface RunAttemptTarget {
+  model?: string;
+  thinking?: ThinkingLevel;
+}
+
+interface RunAgentOptions {
+  onSession: (path: string, model: string, thinking: string) => void;
+  onEvent?: (event: AgentSessionEvent) => void;
+  onWarning?: (warning: string) => void;
+  decisionModel?: boolean;
 }
 
 type AgentResult = CompletedAgentResult | WaitingAgentResult;
@@ -99,6 +117,8 @@ function pruneFinishedRuns(runs: Map<string, ActiveRun>, keep = 100): void {
 function formatArtifacts(report: RunReport): string {
   return [
     `Report: ${report.filePath}`,
+    ...(report.model ? [`Model: ${report.model}${report.thinking ? ` (thinking: ${report.thinking})` : ""}`] : []),
+    ...(report.warnings ?? []).map((warning) => `Warning: ${warning}`),
     ...(report.sessionPaths.length ? ["Child sessions:", ...report.sessionPaths.map((path) => `- ${path}`)] : []),
   ].join("\n");
 }
@@ -111,8 +131,16 @@ function projectSettings(cwd: string): string | undefined {
   }
 }
 
+function decisionModelEnabled(): boolean {
+  try {
+    return readDecisionModel(GLOBAL_SETTINGS);
+  } catch {
+    return false;
+  }
+}
+
 function settingsFor(ctx: ExtensionContext): string[] {
-  const settings = [join(getAgentDir(), "settings.json")];
+  const settings = [GLOBAL_SETTINGS];
   const project = ctx.isProjectTrusted() ? projectSettings(ctx.cwd) : undefined;
   if (project && project !== settings[0]) settings.push(project);
   return settings;
@@ -195,8 +223,8 @@ function resolveModel(modelName: string | undefined, agent: AgentConfig, ctx: Ex
   return model;
 }
 
-async function runAttempt(agent: AgentConfig, task: string, cwd: string, modelName: string | undefined, signal: AbortSignal, timeoutMs: number, ctx: ExtensionContext, pi: ExtensionAPI, onSession: (path: string, model: string) => void, onEvent?: (event: AgentSessionEvent) => void): Promise<AgentResult> {
-  const model = resolveModel(modelName, agent, ctx);
+async function runAttempt(agent: AgentConfig, task: string, cwd: string, target: RunAttemptTarget, signal: AbortSignal, timeoutMs: number, ctx: ExtensionContext, pi: ExtensionAPI, onSession: (path: string, model: string, thinking: string) => void, onEvent?: (event: AgentSessionEvent) => void): Promise<AgentResult> {
+  const model = resolveModel(target.model, agent, ctx);
   const modelRuntime = await ModelRuntime.create({ refreshOnCreate: false, signal });
   const provider = ctx.modelRegistry.getProvider(model.provider);
   if (!provider) throw new Error(`Provider '${model.provider}' is unavailable`);
@@ -278,7 +306,7 @@ async function runAttempt(agent: AgentConfig, task: string, cwd: string, modelNa
     cwd,
     model,
     modelRuntime,
-    thinkingLevel: agent.thinking,
+    thinkingLevel: target.thinking,
     tools: [...agent.tools, "contact_parent"],
     customTools,
     resourceLoader,
@@ -286,8 +314,9 @@ async function runAttempt(agent: AgentConfig, task: string, cwd: string, modelNa
     settingsManager,
   });
   const modelId = `${model.provider}/${model.id}`;
+  const thinking = session.thinkingLevel;
   const sessionPath = sessionManager.getSessionFile();
-  if (sessionPath) onSession(sessionPath, modelId);
+  if (sessionPath) onSession(sessionPath, modelId, thinking);
   const unsubscribe = onEvent ? session.subscribe(onEvent) : undefined;
   let disposed = false;
   const dispose = () => {
@@ -304,8 +333,8 @@ async function runAttempt(agent: AgentConfig, task: string, cwd: string, modelNa
       try {
         await promptChild(session, formatResumePrompt(request, answer), resumeSignal, agent.timeoutMs ?? DEFAULT_TIMEOUT_MS);
         const nextRequest = pendingRequest as ParentRequest | undefined;
-        if (nextRequest) return { status: "waiting", model: modelId, request: nextRequest, continuation };
-        const result: CompletedAgentResult = { status: "completed", output: textFromLastAssistantMessage(session.messages), model: modelId };
+        if (nextRequest) return { status: "waiting", model: modelId, thinking, request: nextRequest, continuation };
+        const result: CompletedAgentResult = { status: "completed", output: textFromLastAssistantMessage(session.messages), model: modelId, thinking };
         dispose();
         return result;
       } catch (error) {
@@ -319,8 +348,8 @@ async function runAttempt(agent: AgentConfig, task: string, cwd: string, modelNa
   try {
     await promptChild(session, task, signal, timeoutMs);
     const request = pendingRequest as ParentRequest | undefined;
-    if (request) return { status: "waiting", model: modelId, request, continuation };
-    const result: CompletedAgentResult = { status: "completed", output: textFromLastAssistantMessage(session.messages), model: modelId };
+    if (request) return { status: "waiting", model: modelId, thinking, request, continuation };
+    const result: CompletedAgentResult = { status: "completed", output: textFromLastAssistantMessage(session.messages), model: modelId, thinking };
     dispose();
     return result;
   } catch (error) {
@@ -329,24 +358,50 @@ async function runAttempt(agent: AgentConfig, task: string, cwd: string, modelNa
   }
 }
 
-async function runAgent(agent: AgentConfig, task: string, cwd: string, signal: AbortSignal, ctx: ExtensionContext, pi: ExtensionAPI, onSession: (path: string, model: string) => void, onEvent?: (event: AgentSessionEvent) => void): Promise<AgentResult> {
+async function routeRun(agent: AgentConfig, task: string, signal: AbortSignal, timeoutMs: number, ctx: ExtensionContext): Promise<RunAttemptTarget | undefined> {
+  const apiKey = readTypeSafeKey(TYPESAFE_CREDENTIALS);
+  if (!apiKey) throw new Error("No TypeSafe API key; run /subagent-decision-model on or set TYPESAFE_API_KEY");
+  return chooseModel({
+    task,
+    agent: { name: agent.name, description: agent.description, tools: agent.tools, model: agent.model, thinking: agent.thinking },
+    candidates: decisionCandidates(ctx.scopedModels ?? [], ctx.modelRegistry.getAvailable()),
+    apiKey,
+    signal,
+    timeoutMs,
+  });
+}
+
+async function runAgent(agent: AgentConfig, task: string, cwd: string, signal: AbortSignal, ctx: ExtensionContext, pi: ExtensionAPI, options: RunAgentOptions): Promise<AgentResult> {
   const candidates = [...new Set([agent.model, ...(agent.fallbackModels ?? [])])];
+  let attempts: RunAttemptTarget[] = (candidates.length ? candidates : [undefined]).map((model) => ({ model, thinking: agent.thinking }));
   const errors: string[] = [];
   const writes = agent.tools.some((tool) => tool === "bash" || tool === "edit" || tool === "write");
   const timeoutMs = agent.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const deadline = Date.now() + timeoutMs;
-  for (const candidate of candidates.length ? candidates : [undefined]) {
+  if (options.decisionModel) {
+    try {
+      const routed = await routeRun(agent, task, signal, Math.max(1, Math.min(DECISION_TIMEOUT_MS, deadline - Date.now())), ctx);
+      if (routed) {
+        const parentModel = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
+        attempts = [routed, ...attempts.filter((attempt) => (attempt.model ?? parentModel) !== routed.model)];
+      }
+    } catch (error) {
+      if (signal.aborted) throw error;
+      options.onWarning?.(`Model routing failed, using configured defaults: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  for (const attempt of attempts) {
     let toolExecuted = false;
     try {
       const remainingMs = deadline - Date.now();
       if (remainingMs <= 0) throw new Error(`Subagent timed out after ${timeoutMs}ms`);
-      return await runAttempt(agent, task, cwd, candidate, signal, remainingMs, ctx, pi, onSession, (event) => {
+      return await runAttempt(agent, task, cwd, attempt, signal, remainingMs, ctx, pi, options.onSession, (event) => {
         if (event.type === "tool_execution_start") toolExecuted = true;
-        onEvent?.(event);
+        options.onEvent?.(event);
       });
     } catch (error) {
       if (signal.aborted || (writes && toolExecuted)) throw error;
-      errors.push(`${candidate ?? "parent model"}: ${error instanceof Error ? error.message : String(error)}`);
+      errors.push(`${attempt.model ?? "parent model"}${attempt.thinking ? ` (${attempt.thinking})` : ""}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   throw new Error(`All models failed for ${agent.name}:\n${errors.join("\n")}`);
@@ -370,9 +425,9 @@ export default function subagents(pi: ExtensionAPI) {
   const settleRun = (run: ActiveRun, result: AgentResult) => {
     if (result.status === "waiting") {
       continuations.set(run.report.id, { continuation: result.continuation, request: result.request });
-      pauseRunReport(run.report, result.model, result.request.questions);
+      pauseRunReport(run.report, result.model, result.thinking, result.request.questions);
     } else {
-      finishRunReport(run.report, { status: "completed", model: result.model, output: result.output });
+      finishRunReport(run.report, { status: "completed", model: result.model, thinking: result.thinking, output: result.output });
       cleanupRun(run.report.id);
     }
     refreshStatus?.();
@@ -430,6 +485,33 @@ export default function subagents(pi: ExtensionAPI) {
         });
       } finally {
         refreshStatus = undefined;
+      }
+    },
+  });
+
+  pi.registerCommand("subagent-decision-model", {
+    description: "Show or toggle Jev routing, or save its API key (on|off|key, global)",
+    handler: async (args: string, ctx: ExtensionCommandContext) => {
+      const argument = args.trim();
+      if (argument && !["on", "off", "key"].includes(argument)) {
+        ctx.ui.notify("Usage: /subagent-decision-model [on|off|key]", "error");
+        return;
+      }
+      try {
+        readDecisionModel(GLOBAL_SETTINGS);
+        if (argument === "key" || (argument === "on" && !readTypeSafeKey(TYPESAFE_CREDENTIALS))) {
+          const key = await promptTypeSafeKey(ctx);
+          if (!key) {
+            ctx.ui.notify("TypeSafe key entry cancelled; routing setting unchanged", "info");
+            return;
+          }
+          writeTypeSafeKey(TYPESAFE_CREDENTIALS, key);
+          ctx.ui.notify(`TypeSafe API key saved to ${TYPESAFE_CREDENTIALS}${process.env.TYPESAFE_API_KEY?.trim() ? "; TYPESAFE_API_KEY still takes precedence" : ""}`, "info");
+        }
+        if (argument === "on" || argument === "off") writeDecisionModel(GLOBAL_SETTINGS, argument === "on");
+        ctx.ui.notify(`Subagent decision model is ${readDecisionModel(GLOBAL_SETTINGS) ? "on" : "off"} (global: ${GLOBAL_SETTINGS})`, "info");
+      } catch (error) {
+        ctx.ui.notify(`Could not ${argument ? "update" : "read"} the subagent decision model setting: ${error instanceof Error ? error.message : String(error)}`, "error");
       }
     },
   });
@@ -591,7 +673,7 @@ export default function subagents(pi: ExtensionAPI) {
             return { content: [{ type: "text", text: `${formatParentRequest(run.report.agent, run.report.id, result.request)}\n\n${formatArtifacts(run.report)}` }], details: { run: run.report } };
           }
           const truncated = truncateHead(result.output);
-          return { content: [{ type: "text", text: `${truncated.content}\n\n${formatArtifacts(run.report)}` }], details: { agent: run.report.agent, model: result.model, report: run.report.filePath, sessions: run.report.sessionPaths } };
+          return { content: [{ type: "text", text: `${truncated.content}\n\n${formatArtifacts(run.report)}` }], details: { agent: run.report.agent, model: result.model, thinking: result.thinking, report: run.report.filePath, sessions: run.report.sessionPaths } };
         } catch (error) {
           throw new Error(`${error instanceof Error ? error.message : String(error)}\n${formatArtifacts(run.report)}`);
         }
@@ -629,11 +711,19 @@ export default function subagents(pi: ExtensionAPI) {
       const activeRun = trackRun(runs, report, signal, params.async === true);
       if (releaseLock) releases.set(report.id, releaseLock);
       refreshStatus?.();
-      const execute = () => executeRun(activeRun, activeRun.signal, () => runAgent(agent, params.task!, ctx.cwd, activeRun.signal, ctx, pi, (sessionPath, model) => {
-        recordRunSession(report, sessionPath, model);
-        refreshStatus?.();
-      }, (event) => {
-        if (captureRunMessage(activeRun.messages, event)) refreshStatus?.();
+      const execute = () => executeRun(activeRun, activeRun.signal, () => runAgent(agent, params.task!, ctx.cwd, activeRun.signal, ctx, pi, {
+        decisionModel: decisionModelEnabled(),
+        onSession: (sessionPath, model, thinking) => {
+          recordRunSession(report, sessionPath, model, thinking);
+          refreshStatus?.();
+        },
+        onEvent: (event) => {
+          if (captureRunMessage(activeRun.messages, event)) refreshStatus?.();
+        },
+        onWarning: (warning) => {
+          recordRunWarning(report, warning);
+          ctx.ui.notify(`${agent.name}: ${warning}`, "warning");
+        },
       }));
 
       if (params.async) {
@@ -668,7 +758,7 @@ export default function subagents(pi: ExtensionAPI) {
         if (result.status === "waiting") {
           return {
             content: [{ type: "text", text: `${formatParentRequest(agent.name, report.id, result.request)}\n\n${formatArtifacts(report)}` }],
-            details: { agent: agent.name, model: result.model, report: report.filePath, sessions: report.sessionPaths, run: report },
+            details: { agent: agent.name, model: result.model, thinking: result.thinking, report: report.filePath, sessions: report.sessionPaths, run: report },
           };
         }
         const truncated = truncateHead(result.output);
@@ -677,7 +767,7 @@ export default function subagents(pi: ExtensionAPI) {
             type: "text",
             text: `${truncated.content}\n\n${formatArtifacts(report)}`,
           }],
-          details: { agent: agent.name, model: result.model, report: report.filePath, sessions: report.sessionPaths },
+          details: { agent: agent.name, model: result.model, thinking: result.thinking, report: report.filePath, sessions: report.sessionPaths },
         };
       } catch (error) {
         throw new Error(`${error instanceof Error ? error.message : String(error)}\n${formatArtifacts(report)}`);

@@ -173,7 +173,7 @@ export class SubagentStatus implements Component {
 
     const title = run ? `${run.report.agent} · ${run.report.status} · ${run.report.id.slice(0, 8)}` : "No run";
     const usage = run ? this.options.theme.fg("dim", formatRunUsage(run.messages)) : "";
-    const model = this.options.theme.fg("muted", `Model: ${run?.report.model ?? "starting…"}`);
+    const model = this.options.theme.fg("muted", `Model: ${run?.report.model ?? "starting…"}${run?.report.thinking ? ` · Thinking: ${run.report.thinking}` : ""}`);
     const lines = hasSidebar
       ? [
           border("╭") + activeBorder("sidebar", "─".repeat(sidebarWidth)) + border("┬") + activeBorder("content", "─".repeat(contentWidth)) + border("╮"),

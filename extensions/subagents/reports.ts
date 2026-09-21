@@ -14,6 +14,8 @@ export interface RunReport {
   startedAt: string;
   finishedAt?: string;
   model?: string;
+  thinking?: string;
+  warnings?: string[];
   questions?: string[];
   output?: string;
   error?: string;
@@ -108,8 +110,10 @@ export function saveRunReport(report: RunReport): void {
     `- Started: ${report.startedAt}`,
     ...(report.finishedAt ? [`- Finished: ${report.finishedAt}`] : []),
     ...(report.model ? [`- Model: ${report.model}`] : []),
+    ...(report.thinking ? [`- Thinking: ${report.thinking}`] : []),
     `- Working directory: ${report.cwd}`,
     ...report.sessionPaths.map((path) => `- Child session: ${path}`),
+    ...(report.warnings ?? []).map((warning) => `- Warning: ${warning}`),
     "",
     "## Task",
     "",
@@ -124,14 +128,20 @@ export function saveRunReport(report: RunReport): void {
   renameSync(temporaryPath, report.filePath);
 }
 
-export function recordRunSession(report: RunReport, sessionPath: string, model: string): void {
+export function recordRunWarning(report: RunReport, warning: string): void {
+  report.warnings = [...(report.warnings ?? []), warning];
+  saveRunReport(report);
+}
+
+export function recordRunSession(report: RunReport, sessionPath: string, model: string, thinking: string): void {
   report.model = model;
+  report.thinking = thinking;
   if (!report.sessionPaths.includes(sessionPath)) report.sessionPaths.push(sessionPath);
   saveRunReport(report);
 }
 
-export function pauseRunReport(report: RunReport, model: string, questions: string[]): void {
-  Object.assign(report, { status: "waiting", model, questions });
+export function pauseRunReport(report: RunReport, model: string, thinking: string, questions: string[]): void {
+  Object.assign(report, { status: "waiting", model, thinking, questions });
   saveRunReport(report);
 }
 
@@ -141,7 +151,7 @@ export function resumeRunReport(report: RunReport): void {
   saveRunReport(report);
 }
 
-export function finishRunReport(report: RunReport, update: Pick<RunReport, "status"> & Partial<Pick<RunReport, "model" | "output" | "error">>): void {
+export function finishRunReport(report: RunReport, update: Pick<RunReport, "status"> & Partial<Pick<RunReport, "model" | "thinking" | "output" | "error">>): void {
   delete report.questions;
   Object.assign(report, update, { finishedAt: new Date().toISOString() });
   saveRunReport(report);

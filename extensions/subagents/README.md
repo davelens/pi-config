@@ -31,7 +31,7 @@ Run `/subagents` to open the two-pane manager:
 - `*` marks a managed definition that differs from its shipped default.
 - `esc` closes the manager.
 
-Run `/subagents-status` while at least one subagent is active to inspect every run started in the current Pi process, including foreground runs and completed siblings. The selected run's current model appears above the output, updating when a fallback starts; live input tokens, output tokens, and cost appear at the top right. The popup follows the latest message by default; use `j`/`k` to scroll, `{`/`}` to jump ten rows, `gg`/`G` to jump to the top/bottom, and `ctrl+n`/`ctrl+p` or the sidebar to switch runs. A single run uses the full panel without a sidebar. If nothing is running, Pi shows an inline message instead of opening the popup.
+Run `/subagents-status` while at least one subagent is active to inspect every run started in the current Pi process, including foreground runs and completed siblings. The selected run's current model and effective thinking level appear above the output, updating when a fallback starts; live input tokens, output tokens, and cost appear at the top right. The popup follows the latest message by default; use `j`/`k` to scroll, `{`/`}` to jump ten rows, `gg`/`G` to jump to the top/bottom, and `ctrl+n`/`ctrl+p` or the sidebar to switch runs. A single run uses the full panel without a sidebar. If nothing is running, Pi shows an inline message instead of opening the popup.
 
 Run `/subagents-doctor` for the same style of scrollable popup covering malformed definitions, unavailable models, invalid tools, configured or missing skills, Pi skill diagnostics, guardrails, and active runs.
 
@@ -63,6 +63,16 @@ Override bundled or custom agents in global `settings.json`, or in a trusted pro
 
 Project settings override global settings. `aliases` maps alternate names to configured agents; direct agent names take precedence over aliases. Supported overrides are `description`, `model`, `fallbackModels`, `thinking`, `timeoutMs`, `skills`, and `tools`. Set `model` to `null` to inherit the parent model. `skills` is an array of Pi skill names. A project override cannot grant `bash`, `edit`, or `write` to an agent whose effective global definition lacks that tool. Unsupported tool names are reported and block the run instead of being silently ignored. Overrides only configure an agent that has a Markdown definition; they do not define its prompt. `/subagents` renders these effective values in the file view without changing the Markdown file.
 
+## Route models with Jev
+
+Run `/subagent-decision-model on` to let TypeSafe's Jev pick the model and thinking level for each new subagent run; `off` restores the configured defaults, and no argument prints the current state. The toggle is stored as `subagents.decisionModel` in the global `settings.json` only; project settings are ignored. It is off by default. Other keys in the file are preserved, and a malformed settings file is reported instead of being overwritten.
+
+When no key is available, `/subagent-decision-model on` opens a hidden-input TUI prompt and saves the key in `typesafe-credentials.json` under Pi's global agent directory (normally `~/.config/pi/`). This is a plaintext credentials file with owner-only permissions (`0600`), excluded from Git; the key is not added to settings, session history, or reports. Cancelling or submitting an empty value leaves routing unchanged. Use `/subagent-decision-model key` to replace the saved key without changing the toggle. `off` retains the saved key. `TYPESAFE_API_KEY` in Pi's environment takes precedence over the file; non-TUI callers must supply that variable or have a saved key. The keyring credential configured for `pi-mcp-adapter` is not reused.
+
+Before every new run, the extension sends one `POST https://api.typesafe.ai/v1/systemone` request (model `jev-latest`, bearer key, native `fetch`, 5-second timeout bounded by the run's remaining budget) with the task text, the agent's name, description, and tools, and one option per valid model/thinking pair: `provider/id`, display name, thinking level, reasoning flag, context window, max tokens, and per-million input/output prices. No credentials, provider headers, parent history, or other model fields are sent. Candidates come from `/scoped-models` (`--models` or `enabledModels`) intersected with the authenticated models; without scoping, every authenticated model is a candidate. Scope pins such as `openai/*:high` restrict that model to the pinned level when supported. Thinking levels are enumerated with Pi's per-model support map, and models from the `llamacpp` and `llama.cpp` providers are excluded. A run always includes a "use agent defaults" option; Jev's answer is accepted at any confidence.
+
+The routed pair runs as the first attempt, followed by the configured model and fallback chain with their configured thinking, without repeating a model that Jev already chose. Definitions, settings overrides, and the parent model are never modified. Missing key, more than 254 pairs, no candidates, HTTP or network errors, timeouts, or an invalid answer produce a warning in the run report and lifecycle results, and the run uses the configured defaults. Stopping a run or shutting down Pi while the routing request is pending aborts it instead of falling back. Resuming a paused run continues on the same session without routing again. Reports and results record the effective session thinking level next to the model.
+
 ## Define an agent
 
 Shipped definitions live in [`default-agents/`](./default-agents/) and are copied to `~/.config/agents/pi/` when that directory does not exist. Runtime reads, edits, creates, and renames only the copies in `~/.config/agents/pi/`; committed defaults stay untouched.
@@ -92,8 +102,9 @@ Every run immediately creates a Markdown report under `~/.config/agents/pi/repor
 
 ```bash
 (cd extensions/subagents && npm test)
+node tests/subagents-decision-model.test.mjs
 node tests/subagents-status.test.mjs
 node tests/subagents-bridge.test.mjs
 ```
 
-The bridge check exercises the actual subagent runner and Claude Bridge prompt capture offline, stopping before Claude Code starts. It requires the configured Bridge and guardrails packages to be installed.
+The decision model check exercises the toggle, candidate filtering, the mocked Jev request, and the actual runner (override, fallback, async cancellation, resume) with a fake provider and no network access. The bridge check exercises the actual subagent runner and Claude Bridge prompt capture offline, stopping before Claude Code starts. It requires the configured Bridge and guardrails packages to be installed.

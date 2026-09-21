@@ -171,10 +171,10 @@ function migrateLegacyReadOnlyAgents(defaultsDirectory: string, agentsDirectory:
   }
 }
 
-function atomicWrite(filePath: string, content: string): void {
+export function atomicWrite(filePath: string, content: string, mode?: number): void {
   const temporaryPath = `${filePath}.${randomUUID()}.tmp`;
   try {
-    writeFileSync(temporaryPath, content);
+    writeFileSync(temporaryPath, content, { flag: "wx", mode });
     renameSync(temporaryPath, filePath);
   } finally {
     rmSync(temporaryPath, { force: true });

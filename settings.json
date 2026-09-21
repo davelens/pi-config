@@ -39,5 +39,8 @@
   "defaultProjectTrust": "ask",
   "doubleEscapeAction": "tree",
   "tuiMode": "regular",
-  "fullscreenScrollbar": "auto"
+  "fullscreenScrollbar": "auto",
+  "subagents": {
+    "decisionModel": true
+  }
 }

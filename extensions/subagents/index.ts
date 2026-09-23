@@ -21,7 +21,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { Type, type Static } from "typebox";
 import { agentConfigurationIssues, diagnoseAgentDefinitions, discoverAgents, FORBIDDEN_CHILD_SKILL, resolveAgent, type AgentConfig, type ThinkingLevel } from "./agents.ts";
 import { ensureDefaultAgents } from "./agent-files.ts";
-import { createContactParentTool } from "./contact-parent.ts";
+import { askParent, createContactParentTool, formatQuestions, loadQuestionnaire, ParentQuestionError, type ParentRequest } from "./contact-parent.ts";
 import { chooseModel, DECISION_TIMEOUT_MS, decisionCandidates, readDecisionModel, writeDecisionModel } from "./decision-model.ts";
 import { buildDoctorReport } from "./doctor-report.ts";
 import { SubagentsDoctor } from "./doctor.ts";
@@ -30,7 +30,6 @@ import { promptChild } from "./prompt-child.ts";
 import { acquireMutationLock, finishRunReport, pauseRunReport, recordRunSession, recordRunWarning, resumeRunReport, startRunReport, type RunReport } from "./reports.ts";
 import { captureRunMessage, trackRun, waitForRun, type ActiveRun } from "./run-stream.ts";
 import { SubagentStatus } from "./status.ts";
-import { formatParentRequest, formatResumePrompt, type ParentRequest } from "./supervision.ts";
 import { promptTypeSafeKey, readTypeSafeKey, writeTypeSafeKey } from "./typesafe-key.ts";
 
 const DEFAULT_AGENTS = fileURLToPath(new URL("./default-agents", import.meta.url));
@@ -45,7 +44,8 @@ const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
 const SUBAGENT_BOUNDARIES = `# Boundaries
 Return only the requested deliverable and blockers, as concisely as correctness allows. Do one pass, stop when the task is answered, and do not expand scope, propose follow-up work, or continue searching for additional issues unless the task explicitly requires it.
 Treat pre-existing worktree and index changes as human-owned. Preserve them: never stash, reset, restore, clean, discard, or overwrite unrelated changes. Stop and report a blocker when overlap prevents safe work.
-When a required decision cannot be resolved from the task or repository, call contact_parent alone with 1-4 specific questions. Wait for the parent response, then continue the same task.`;
+When a required decision cannot be resolved from the task or repository, call contact_parent alone with 1-4 specific questions; the user answers them in the parent UI, and cancelling stops your run. Wait for the response, then continue the same task.
+Read skill files at the exact paths advertised in this prompt; do not guess alternative locations.`;
 const gitInspectSchema = Type.Object({
   command: StringEnum(["git diff", "git diff --cached", "git status --short", "git diff <base>...HEAD", "git log <base>..HEAD --oneline"] as const),
   base: Type.Optional(Type.String({ description: "Base revision for commands containing <base>" })),
@@ -73,19 +73,10 @@ function validateKetchArgs(command: KetchInput["command"], args: string[]): void
   }
 }
 
-interface CompletedAgentResult {
-  status: "completed";
+interface AgentResult {
   output: string;
   model: string;
   thinking: string;
-}
-
-interface WaitingAgentResult {
-  status: "waiting";
-  model: string;
-  thinking: string;
-  request: ParentRequest;
-  continuation: AgentContinuation;
 }
 
 interface RunAttemptTarget {
@@ -94,17 +85,12 @@ interface RunAttemptTarget {
 }
 
 interface RunAgentOptions {
+  questionnaire: ToolDefinition;
+  askParent: (request: ParentRequest, signal: AbortSignal) => Promise<string>;
   onSession: (path: string, model: string, thinking: string) => void;
   onEvent?: (event: AgentSessionEvent) => void;
   onWarning?: (warning: string) => void;
   decisionModel?: boolean;
-}
-
-type AgentResult = CompletedAgentResult | WaitingAgentResult;
-
-interface AgentContinuation {
-  resume(answer: string, signal: AbortSignal): Promise<AgentResult>;
-  dispose(): void;
 }
 
 function pruneFinishedRuns(runs: Map<string, ActiveRun>, keep = 100): void {
@@ -223,7 +209,7 @@ function resolveModel(modelName: string | undefined, agent: AgentConfig, ctx: Ex
   return model;
 }
 
-async function runAttempt(agent: AgentConfig, task: string, cwd: string, target: RunAttemptTarget, signal: AbortSignal, timeoutMs: number, ctx: ExtensionContext, pi: ExtensionAPI, onSession: (path: string, model: string, thinking: string) => void, onEvent?: (event: AgentSessionEvent) => void): Promise<AgentResult> {
+async function runAttempt(agent: AgentConfig, task: string, cwd: string, target: RunAttemptTarget, signal: AbortSignal, timeoutMs: number, ctx: ExtensionContext, pi: ExtensionAPI, options: RunAgentOptions, onEvent?: (event: AgentSessionEvent) => void): Promise<AgentResult> {
   const model = resolveModel(target.model, agent, ctx);
   const modelRuntime = await ModelRuntime.create({ refreshOnCreate: false, signal });
   const provider = ctx.modelRegistry.getProvider(model.provider);
@@ -262,10 +248,7 @@ async function runAttempt(agent: AgentConfig, task: string, cwd: string, target:
   const missingSkills = [...selectedSkills].filter((skill) => !loadedSkills.has(skill));
   if (missingSkills.length) throw new Error(`Skills not found for ${agent.name}: ${missingSkills.join(", ")}`);
 
-  let pendingRequest: ParentRequest | undefined;
-  const customTools: ToolDefinition[] = [createContactParentTool((request) => {
-    pendingRequest = request;
-  })];
+  const customTools: ToolDefinition[] = [createContactParentTool(options.questionnaire, options.askParent)];
   if (agent.tools.includes("git_inspect")) customTools.push({
     name: "git_inspect",
     label: "Read-only Git",
@@ -316,45 +299,14 @@ async function runAttempt(agent: AgentConfig, task: string, cwd: string, target:
   const modelId = `${model.provider}/${model.id}`;
   const thinking = session.thinkingLevel;
   const sessionPath = sessionManager.getSessionFile();
-  if (sessionPath) onSession(sessionPath, modelId, thinking);
+  if (sessionPath) options.onSession(sessionPath, modelId, thinking);
   const unsubscribe = onEvent ? session.subscribe(onEvent) : undefined;
-  let disposed = false;
-  const dispose = () => {
-    if (disposed) return;
-    disposed = true;
-    unsubscribe?.();
-    session.dispose();
-  };
-  const continuation: AgentContinuation = {
-    async resume(answer, resumeSignal) {
-      const request = pendingRequest;
-      if (!request) throw new Error("Subagent has no pending parent request");
-      pendingRequest = undefined;
-      try {
-        await promptChild(session, formatResumePrompt(request, answer), resumeSignal, agent.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-        const nextRequest = pendingRequest as ParentRequest | undefined;
-        if (nextRequest) return { status: "waiting", model: modelId, thinking, request: nextRequest, continuation };
-        const result: CompletedAgentResult = { status: "completed", output: textFromLastAssistantMessage(session.messages), model: modelId, thinking };
-        dispose();
-        return result;
-      } catch (error) {
-        dispose();
-        throw error;
-      }
-    },
-    dispose,
-  };
-
   try {
     await promptChild(session, task, signal, timeoutMs);
-    const request = pendingRequest as ParentRequest | undefined;
-    if (request) return { status: "waiting", model: modelId, thinking, request, continuation };
-    const result: CompletedAgentResult = { status: "completed", output: textFromLastAssistantMessage(session.messages), model: modelId, thinking };
-    dispose();
-    return result;
-  } catch (error) {
-    dispose();
-    throw error;
+    return { output: textFromLastAssistantMessage(session.messages), model: modelId, thinking };
+  } finally {
+    unsubscribe?.();
+    session.dispose();
   }
 }
 
@@ -395,7 +347,7 @@ async function runAgent(agent: AgentConfig, task: string, cwd: string, signal: A
     try {
       const remainingMs = deadline - Date.now();
       if (remainingMs <= 0) throw new Error(`Subagent timed out after ${timeoutMs}ms`);
-      return await runAttempt(agent, task, cwd, attempt, signal, remainingMs, ctx, pi, options.onSession, (event) => {
+      return await runAttempt(agent, task, cwd, attempt, signal, remainingMs, ctx, pi, options, (event) => {
         if (event.type === "tool_execution_start") toolExecuted = true;
         options.onEvent?.(event);
       });
@@ -410,54 +362,74 @@ async function runAgent(agent: AgentConfig, task: string, cwd: string, signal: A
 export default function subagents(pi: ExtensionAPI) {
   ensureDefaultAgents(DEFAULT_AGENTS, AGENTS_DIRECTORY);
   const runs = new Map<string, ActiveRun>();
-  const continuations = new Map<string, { continuation: AgentContinuation; request: ParentRequest }>();
   const releases = new Map<string, () => void>();
+  let questionnaire: Promise<ToolDefinition> | undefined;
+  // ponytail: one questionnaire at a time across every child; queue order is arrival order.
+  let questionnaireTurn: Promise<unknown> = Promise.resolve();
   let refreshStatus: (() => void) | undefined;
   let shuttingDown = false;
 
   const cleanupRun = (runId: string) => {
-    continuations.get(runId)?.continuation.dispose();
-    continuations.delete(runId);
     releases.get(runId)?.();
     releases.delete(runId);
-  };
-
-  const settleRun = (run: ActiveRun, result: AgentResult) => {
-    if (result.status === "waiting") {
-      continuations.set(run.report.id, { continuation: result.continuation, request: result.request });
-      pauseRunReport(run.report, result.model, result.thinking, result.request.questions);
-    } else {
-      finishRunReport(run.report, { status: "completed", model: result.model, thinking: result.thinking, output: result.output });
-      cleanupRun(run.report.id);
-    }
-    refreshStatus?.();
-    return result;
   };
 
   const executeRun = async (run: ActiveRun, runSignal: AbortSignal, operation: () => Promise<AgentResult>) => {
     try {
       const result = await operation();
       runSignal.throwIfAborted();
-      return settleRun(run, result);
+      finishRunReport(run.report, { status: "completed", model: result.model, thinking: result.thinking, output: result.output });
+      return result;
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      finishRunReport(run.report, { status: runSignal.aborted ? "aborted" : "failed", error: message });
+      const failure = runSignal.aborted && runSignal.reason instanceof ParentQuestionError ? runSignal.reason : error;
+      finishRunReport(run.report, {
+        status: failure instanceof ParentQuestionError ? failure.status : runSignal.aborted ? "aborted" : "failed",
+        error: failure instanceof Error ? failure.message : String(failure),
+      });
+      throw failure;
+    } finally {
       cleanupRun(run.report.id);
       refreshStatus?.();
-      throw error;
-    } finally {
       pruneFinishedRuns(runs);
     }
+  };
+
+  // The child's blocking questions go to the user through the installed questionnaire; the answer is the
+  // child's tool result. Cancelling or a UI failure aborts that child instead of retrying or guessing.
+  const askParentFor = (run: ActiveRun, ctx: ExtensionContext, tool: ToolDefinition) => async (request: ParentRequest, signal: AbortSignal) => {
+    const questions = formatQuestions(request);
+    const turn = questionnaireTurn.then(async () => {
+      signal.throwIfAborted();
+      pauseRunReport(run.report, questions);
+      refreshStatus?.();
+      try {
+        return await askParent(tool, ctx, request, signal);
+      } finally {
+        resumeRunReport(run.report);
+        refreshStatus?.();
+      }
+    });
+    questionnaireTurn = turn.catch(() => undefined);
+    let abort: () => void;
+    const cancelled = new Promise<never>((_resolve, reject) => {
+      abort = () => reject(signal.reason);
+      if (signal.aborted) abort();
+      else signal.addEventListener("abort", abort, { once: true });
+    });
+    const answer = await Promise.race([turn, cancelled]).finally(() => signal.removeEventListener("abort", abort));
+    if (answer.status === "answered") return answer.text;
+    const listed = questions.map((question, index) => `${index + 1}. ${question}`).join("\n");
+    const error = answer.status === "cancelled"
+      ? new ParentQuestionError("aborted", `User cancelled the questionnaire, so ${run.report.agent} stopped before deciding:\n${listed}`)
+      : new ParentQuestionError("failed", `Parent questionnaire failed for ${run.report.agent}: ${answer.message}\nUnanswered:\n${listed}`);
+    run.controller.abort(error);
+    throw error;
   };
 
   pi.on("session_shutdown", async () => {
     shuttingDown = true;
     for (const run of runs.values()) {
       if (run.report.status === "running" || run.report.status === "waiting") run.controller.abort();
-      if (run.report.status === "waiting") {
-        cleanupRun(run.report.id);
-        finishRunReport(run.report, { status: "aborted", error: "Parent session ended while waiting for input" });
-      }
     }
     await Promise.allSettled([...runs.values()].map(({ promise }) => promise));
     for (const run of runs.values()) cleanupRun(run.report.id);
@@ -595,18 +567,17 @@ export default function subagents(pi: ExtensionAPI) {
     promptGuidelines: [
       "Use subagent with action=list before choosing an unfamiliar agent.",
       "Use subagent with action=wait to await an asynchronous run, action=status to inspect it, and action=stop to abort it.",
-      "When a subagent pauses for parent input, answer from established context or use ask_user_question, then call subagent action=resume with the same runId and the answer.",
+      "A subagent's blocking questions open the ask_user_question questionnaire for the user; never answer them yourself. If the user cancels, that run is aborted: pick a safe task-dependent alternative or new subagent, or report the blocker.",
       "Use separate subagent calls for independent parallel tasks; mutation-capable subagents are limited to one per Git worktree.",
       "For user-approved broad implementation, use a planner first and dispatch its independent worker slices sequentially in dependency order.",
       "Run each worker slice once. Do not retry failed slices or add follow-up validation agents unless the current user explicitly asks.",
     ],
     parameters: Type.Object({
-      action: StringEnum(["list", "run", "wait", "resume", "status", "stop"] as const),
+      action: StringEnum(["list", "run", "wait", "status", "stop"] as const),
       agent: Type.Optional(Type.String({ description: "Agent name for action=run" })),
       task: Type.Optional(Type.String({ description: "Self-contained task for action=run" })),
       async: Type.Optional(Type.Boolean({ description: "Return immediately and run in the background" })),
-      runId: Type.Optional(Type.String({ description: "Run ID for action=wait, resume, status, or stop" })),
-      answer: Type.Optional(Type.String({ description: "Parent or user answers for action=resume" })),
+      runId: Type.Optional(Type.String({ description: "Run ID for action=wait, status, or stop" })),
     }),
     async execute(_id, params, signal, onUpdate, ctx) {
       const agents = agentsFor(ctx);
@@ -639,13 +610,6 @@ export default function subagents(pi: ExtensionAPI) {
         const run = runs.get(params.runId);
         if (!run) throw new Error(`Unknown run '${params.runId}'`);
         await waitForRun(run, signal);
-        if (run.report.status === "waiting") {
-          const pending = continuations.get(params.runId);
-          const message = pending
-            ? formatParentRequest(run.report.agent, run.report.id, pending.request)
-            : `Run ${params.runId} is waiting for parent input`;
-          return { content: [{ type: "text", text: `${message}\n\n${formatArtifacts(run.report)}` }], details: { run: run.report } };
-        }
         if (run.report.status === "completed") {
           const output = truncateHead(run.report.output ?? "").content;
           return { content: [{ type: "text", text: `${output}\n\n${formatArtifacts(run.report)}` }], details: { run: run.report } };
@@ -656,41 +620,13 @@ export default function subagents(pi: ExtensionAPI) {
         };
       }
 
-      if (params.action === "resume") {
-        if (!params.runId || !params.answer?.trim()) throw new Error("action=resume requires runId and answer");
-        const run = runs.get(params.runId);
-        const pending = continuations.get(params.runId);
-        if (!run) throw new Error(`Unknown run '${params.runId}'`);
-        if (run.report.status !== "waiting" || !pending) throw new Error(`Run ${params.runId} is not waiting for input`);
-        continuations.delete(params.runId);
-        resumeRunReport(run.report);
-        const resumeSignal = AbortSignal.any([signal ?? new AbortController().signal, run.controller.signal]);
-        const execution = executeRun(run, resumeSignal, () => pending.continuation.resume(params.answer!, resumeSignal));
-        run.promise = execution.then(() => undefined, () => undefined);
-        try {
-          const result = await execution;
-          if (result.status === "waiting") {
-            return { content: [{ type: "text", text: `${formatParentRequest(run.report.agent, run.report.id, result.request)}\n\n${formatArtifacts(run.report)}` }], details: { run: run.report } };
-          }
-          const truncated = truncateHead(result.output);
-          return { content: [{ type: "text", text: `${truncated.content}\n\n${formatArtifacts(run.report)}` }], details: { agent: run.report.agent, model: result.model, thinking: result.thinking, report: run.report.filePath, sessions: run.report.sessionPaths } };
-        } catch (error) {
-          throw new Error(`${error instanceof Error ? error.message : String(error)}\n${formatArtifacts(run.report)}`);
-        }
-      }
-
       if (params.action === "stop") {
         if (!params.runId) throw new Error("action=stop requires runId");
         const run = runs.get(params.runId);
         if (!run) throw new Error(`Unknown run '${params.runId}'`);
         if (run.report.status !== "running" && run.report.status !== "waiting") return { content: [{ type: "text", text: `Run ${params.runId} is already ${run.report.status}\n\n${formatArtifacts(run.report)}` }], details: { run: run.report } };
         run.controller.abort();
-        if (run.report.status === "waiting") {
-          cleanupRun(params.runId);
-          finishRunReport(run.report, { status: "aborted", error: "Stopped while waiting for parent input" });
-        } else {
-          await run.promise;
-        }
+        await run.promise;
         return { content: [{ type: "text", text: `Stopped ${params.runId}\n\n${formatArtifacts(run.report)}` }], details: { run: run.report } };
       }
 
@@ -701,7 +637,12 @@ export default function subagents(pi: ExtensionAPI) {
       const writes = agent.tools.some((tool) => tool === "bash" || tool === "edit" || tool === "write");
       const report = startRunReport(REPORTS_DIRECTORY, agent.name, params.task, ctx.cwd);
       let releaseLock: (() => void) | undefined;
+      let questionnaireTool: ToolDefinition;
       try {
+        questionnaireTool = await (questionnaire ??= loadQuestionnaire(pi).catch((error) => {
+          questionnaire = undefined;
+          throw error;
+        }));
         releaseLock = writes ? acquireMutationLock(REPORTS_DIRECTORY, ctx.cwd, report.id) : undefined;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -712,6 +653,8 @@ export default function subagents(pi: ExtensionAPI) {
       if (releaseLock) releases.set(report.id, releaseLock);
       refreshStatus?.();
       const execute = () => executeRun(activeRun, activeRun.signal, () => runAgent(agent, params.task!, ctx.cwd, activeRun.signal, ctx, pi, {
+        questionnaire: questionnaireTool,
+        askParent: askParentFor(activeRun, ctx, questionnaireTool),
         decisionModel: decisionModelEnabled(),
         onSession: (sessionPath, model, thinking) => {
           recordRunSession(report, sessionPath, model, thinking);
@@ -728,18 +671,17 @@ export default function subagents(pi: ExtensionAPI) {
 
       if (params.async) {
         activeRun.promise = execute()
-          .then((result) => {
-            if (shuttingDown) return;
-            if (result.status === "waiting") {
-              const message = formatParentRequest(agent.name, report.id, result.request);
-              ctx.ui.notify(`${agent.name} needs parent input`, "warning");
-              pi.sendMessage({ customType: "subagent-parent-request", content: message, display: true }, { deliverAs: "steer", triggerTurn: true });
-            } else {
-              ctx.ui.notify(`${agent.name} completed: ${report.filePath}`, "info");
-            }
+          .then(() => {
+            if (!shuttingDown) ctx.ui.notify(`${agent.name} completed: ${report.filePath}`, "info");
           })
           .catch((error) => {
-            if (!shuttingDown) ctx.ui.notify(`${agent.name} ${report.status}: ${error instanceof Error ? error.message : String(error)}`, "error");
+            if (shuttingDown) return;
+            const message = `${agent.name} ${report.status}: ${error instanceof Error ? error.message : String(error)}`;
+            ctx.ui.notify(message, "error");
+            // A user cancellation or failure needs a fresh parent decision; a deliberate stop does not.
+            if (error instanceof ParentQuestionError || report.status === "failed") {
+              pi.sendMessage({ customType: "subagent-run-ended", content: `${message}\nRun ID: ${report.id}\nChoose a safe task-dependent alternative or a new subagent, or report the blocker; do not answer for the user.`, display: true }, { deliverAs: "steer", triggerTurn: true });
+            }
           });
         return {
           content: [{ type: "text", text: `Started ${agent.name} asynchronously. Run ID: ${report.id}\n${formatArtifacts(report)}` }],
@@ -755,12 +697,6 @@ export default function subagents(pi: ExtensionAPI) {
       activeRun.promise = execution.then(() => undefined, () => undefined);
       try {
         const result = await execution;
-        if (result.status === "waiting") {
-          return {
-            content: [{ type: "text", text: `${formatParentRequest(agent.name, report.id, result.request)}\n\n${formatArtifacts(report)}` }],
-            details: { agent: agent.name, model: result.model, thinking: result.thinking, report: report.filePath, sessions: report.sessionPaths, run: report },
-          };
-        }
         const truncated = truncateHead(result.output);
         return {
           content: [{

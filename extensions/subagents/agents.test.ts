@@ -18,7 +18,6 @@ import {
 import { acquireMutationLock, finishRunReport, pauseRunReport, pruneRunReports, recordRunSession, recordRunWarning, resumeRunReport, startRunReport } from "./reports.ts";
 import { buildDoctorReport } from "./doctor-report.ts";
 import { captureRunMessage, formatRunUsage, runUsage, streamJump, trackRun, waitForRun, type RunMessage } from "./run-stream.ts";
-import { formatParentRequest, formatResumePrompt } from "./supervision.ts";
 
 const definition = (name: string, description: string) => `---\nname: ${name}\ndescription: ${description}\ntools: read, grep\nthinking: low\n---\nBe useful.`;
 
@@ -332,18 +331,13 @@ test("persists every child session path in the run report", () => {
 test("persists paused questions and resumes the same report", () => {
   const directory = mkdtempSync(join(tmpdir(), "lofi-subagent-paused-report-"));
   const report = startRunReport(directory, "worker", "Implement this", "/project");
-  pauseRunReport(report, "openai/test", "medium", ["Which behavior should win?"]);
+  recordRunSession(report, "/sessions/first.jsonl", "openai/test", "medium");
+  pauseRunReport(report, ["Which behavior should win?"]);
   assert.match(readFileSync(report.filePath, "utf8"), /Status: waiting[\s\S]*Thinking: medium[\s\S]*Which behavior should win/);
   resumeRunReport(report);
   const resumed = readFileSync(report.filePath, "utf8");
   assert.match(resumed, /Status: running/);
   assert.doesNotMatch(resumed, /Pending questions/);
-});
-
-test("formats parent requests and resume prompts", () => {
-  const request = { questions: ["Choose A or B?"], context: "Both pass validation." };
-  assert.match(formatParentRequest("worker", "run-1", request), /ask_user_question[\s\S]*action=resume[\s\S]*run-1/);
-  assert.match(formatResumePrompt(request, "Choose B."), /Choose A or B[\s\S]*Choose B[\s\S]*Continue the original task/);
 });
 
 test("prunes old completed reports without removing active reports", () => {
@@ -354,7 +348,7 @@ test("prunes old completed reports without removing active reports", () => {
   }
   const active = startRunReport(directory, "reviewer", "Still running", "/project");
   const waiting = startRunReport(directory, "worker", "Waiting", "/project");
-  pauseRunReport(waiting, "openai/test", "low", ["Continue?"]);
+  pauseRunReport(waiting, ["Continue?"]);
 
   pruneRunReports(directory, 2);
 

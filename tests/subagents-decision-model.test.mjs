@@ -137,7 +137,7 @@ globalThis.fetch = noFetch;
   await assert.rejects(aborted, { name: "AbortError" });
 }
 
-// The actual runner: override, fallback safety, async cancellation, and resume.
+// The actual runner: override, fallback safety, async cancellation, and parent questionnaires.
 let session;
 try {
   const { createAgentSession, DefaultResourceLoader, ModelRegistry, ModelRuntime, SessionManager, SettingsManager } = await import(pathToFileURL(join(piRoot, "dist/index.js")).href);
@@ -168,9 +168,10 @@ try {
     api: "openai-completions",
     baseUrl: "http://127.0.0.1:9",
     models: [modelDefinition("cheap"), modelDefinition("smart", { reasoning: true }), modelDefinition("spare")],
-    streamSimple(model, _context, options) {
+    streamSimple(model, context, options) {
       const step = script.shift() ?? { text: "DONE" };
-      streams.push({ model: `${model.provider}/${model.id}`, reasoning: options?.reasoning });
+      const last = context.messages.at(-1);
+      streams.push({ model: `${model.provider}/${model.id}`, reasoning: options?.reasoning, ...(last?.role === "toolResult" ? { toolResult: last.content.map((part) => part.text ?? "").join("") } : {}) });
       const stream = createAssistantMessageEventStream();
       const base = { role: "assistant", api: model.api, provider: model.provider, model: model.id, usage, timestamp: Date.now() };
       if (step.error) {
@@ -371,20 +372,170 @@ try {
   assert.doesNotMatch(readFileSync(stopped.details.run.filePath, "utf8"), /Warning/);
   assert.deepEqual(streams.splice(0), []);
 
-  // Resume after a parent question does not route again.
+  // Parent questions open the installed questionnaire; the user's answer reaches the same child turn without routing again.
   fetchCalls = 0;
   globalThis.fetch = jevAnswer((ids) => ids[1]);
-  script = [{ toolCall: { name: "contact_parent", arguments: { questions: ["Which parser?"], context: "Two exist." } } }, { text: "RESUMED_OK" }];
+  const question = (text, header = "Parser") => ({ question: text, header, options: [{ label: "New", description: "The rewritten parser" }, { label: "Old", description: "The legacy parser" }] });
+  const ask = (...questions) => ({ toolCall: { name: "contact_parent", arguments: { questions } } });
+  const asked = [];
+  const plan = (...steps) => {
+    script = steps;
+    asked.splice(0, asked.length, ...steps.filter((step) => step.toolCall).map((step) => step.toolCall.arguments.questions));
+  };
+  const status = async (runId) => (await tool.execute("status", { action: "status", ...(runId ? { runId } : {}) }, new AbortController().signal, undefined, ctx)).details.runs;
+  const wait = (runId) => tool.execute("wait", { action: "wait", runId }, new AbortController().signal, undefined, ctx);
+  const settle = (ms = 20) => new Promise((resolve) => setTimeout(resolve, ms));
+  let open = 0;
+  let answer = (questions) => ({ answers: questions.map((q, questionIndex) => ({ questionIndex, question: q.question, kind: "option", answer: "New" })), cancelled: false });
+  ctx.hasUI = true;
+  ctx.ui.custom = async (_factory, options) => {
+    assert.equal(options?.overlay, true, "the installed questionnaire overlay is used");
+    assert.equal(open++, 0, "questionnaires never overlap");
+    await settle(5);
+    open--;
+    return answer(asked.shift());
+  };
+  plan(ask(question("Which parser?")), { text: "ANSWERED_OK" });
   result = await run("Pick a parser");
-  assert.match(result.content[0].text, /Which parser\?/);
+  assert.match(result.content[0].text, /ANSWERED_OK/);
   assert.match(result.content[0].text, /Model: fake\/smart \(thinking: high\)/);
-  const waiting = await tool.execute("status", { action: "status", runId: result.details.run.id }, new AbortController().signal, undefined, ctx);
-  assert.match(waiting.content[0].text, /waiting[\s\S]*Model: fake\/smart \(thinking: high\)/);
-  const resumed = await tool.execute("resume", { action: "resume", runId: result.details.run.id, answer: "The new one." }, new AbortController().signal, undefined, ctx);
-  assert.match(resumed.content[0].text, /RESUMED_OK/);
-  assert.equal(resumed.details.thinking, "high");
-  assert.equal(fetchCalls, 1);
-  assert.deepEqual(streams.splice(0).map(({ model }) => model), ["fake/smart", "fake/smart"]);
+  assert.equal(fetchCalls, 1, "answering does not route again");
+  let seen = streams.splice(0);
+  assert.deepEqual(seen.map(({ model }) => model), ["fake/smart", "fake/smart"]);
+  assert.match(seen[1].toolResult, /"Which parser\?"="New"/, "the user's answer is the child's tool result");
+  assert.match(readFileSync(result.details.report, "utf8"), /Status: completed/);
+  assert.doesNotMatch(readFileSync(result.details.report, "utf8"), /Pending questions/);
+
+  // Repeated questions after an answer each open the questionnaire again.
+  plan(ask(question("Which parser?")), ask(question("Which lexer?", "Lexer")), { text: "TWICE_OK" });
+  result = await run("Pick both");
+  assert.match(result.content[0].text, /TWICE_OK/);
+  seen = streams.splice(0);
+  assert.equal(seen.length, 3);
+  assert.match(seen[2].toolResult, /"Which lexer\?"="New"/);
+
+  // Cancelling stops the child without retry, releases the writer lock, and names the questions.
+  writeFileSync(join(managed, "scribe.md"), "---\nname: scribe\ndescription: Test writer\nmodel: fake/cheap\nfallbackModels: fake/spare\ntools: read, edit\n---\nWrite briefly.\n");
+  answer = () => ({ answers: [], cancelled: true });
+  plan(ask(question("Which parser?")), { text: "MUST_NOT_RUN" });
+  await assert.rejects(run("Cancel me", { agent: "scribe" }), (error) => /cancel/i.test(error.message) && /Which parser\?/.test(error.message) && !/MUST_NOT_RUN/.test(error.message));
+  assert.equal(streams.splice(0).length, 1, "no retry, no fallback, no question loop");
+  const cancelled = (await status()).find(({ agent }) => agent === "scribe");
+  assert.equal(cancelled.status, "aborted");
+  assert.match(cancelled.error, /cancel/i);
+  plan({ text: "LOCK_FREE" });
+  result = await run("Write again", { agent: "scribe" });
+  assert.match(result.content[0].text, /LOCK_FREE/);
+  streams.splice(0);
+
+  // A UI failure is a failed run carrying the questionnaire's own error, not a cancellation.
+  answer = () => undefined;
+  plan(ask(question("Which parser?")), { text: "MUST_NOT_RUN" });
+  await assert.rejects(run("Broken UI"), /cannot render the questionnaire/);
+  assert.equal((await status()).at(-1).status, "failed");
+  ctx.hasUI = false;
+  plan(ask(question("Which parser?")), { text: "MUST_NOT_RUN" });
+  await assert.rejects(run("No UI"), /UI not available/);
+  assert.equal((await status()).at(-1).status, "failed");
+  ctx.hasUI = true;
+  assert.equal(streams.splice(0).length, 2, "failures never continue the child");
+
+  // Stopping an async run dismisses its open questionnaire and settles without leaking the lock.
+  const opened = [];
+  ctx.ui.custom = (factory) => new Promise(() => { opened.push(factory); });
+  plan(ask(question("Which parser?")), { text: "MUST_NOT_RUN" });
+  let asking = await run("Async question", { agent: "scribe", async: true });
+  await settle();
+  assert.equal(opened.length, 1, "the questionnaire opened for the async child");
+  assert.match((await status(asking.details.run.id))[0].questions.join(), /Which parser\?/);
+  assert.equal((await status(asking.details.run.id))[0].status, "waiting");
+  const halted = await tool.execute("stop", { action: "stop", runId: asking.details.run.id }, new AbortController().signal, undefined, ctx);
+  assert.equal(halted.details.run.status, "aborted");
+  assert.equal(streams.splice(0).length, 1);
+  ctx.ui.custom = async () => answer(asked.shift());
+  plan({ text: "LOCK_FREE_AGAIN" });
+  result = await run("Write after stop", { agent: "scribe" });
+  assert.match(result.content[0].text, /LOCK_FREE_AGAIN/);
+  streams.splice(0);
+
+  // Async cancellation informs and wakes the parent instead of re-prompting; wait sees the aborted run.
+  answer = () => ({ answers: [], cancelled: true });
+  const parentMessages = session.messages.length;
+  plan(ask(question("Which parser?")), { text: "MUST_NOT_RUN" });
+  asking = await run("Async cancel", { async: true });
+  const waited = await wait(asking.details.run.id);
+  assert.equal(waited.details.run.status, "aborted");
+  assert.match(waited.content[0].text, /cancel[\s\S]*Which parser\?/i);
+  await settle(50);
+  assert.match(notices.at(-1), /^error: oracle aborted: .*cancel/i);
+  assert.ok(session.messages.slice(parentMessages).some((message) => message.role === "custom" && /cancel[\s\S]*Which parser\?/i.test(JSON.stringify(message.content))), "the parent is woken with the cancelled questions");
+  streams.splice(0);
+
+  // Concurrent read-only children serialize their questionnaires and each get their own answer.
+  answer = (questions) => ({ answers: [{ questionIndex: 0, question: questions[0].question, kind: "custom", answer: `Answer to ${questions[0].header}` }], cancelled: false });
+  ctx.ui.custom = async () => {
+    assert.equal(open++, 0, "questionnaires never overlap");
+    await settle(10);
+    open--;
+    return answer(asked.shift());
+  };
+  plan(ask(question("Which parser?", "First")), ask(question("Which lexer?", "Second")), { text: "FIRST_DONE" }, { text: "SECOND_DONE" });
+  const first = await run("First question", { async: true });
+  const second = await run("Second question", { async: true });
+  const results = await Promise.all([first, second].map(({ details }) => wait(details.run.id)));
+  assert.match(results[0].content[0].text, /FIRST_DONE/);
+  assert.match(results[1].content[0].text, /SECOND_DONE/);
+  seen = streams.splice(0);
+  assert.deepEqual(seen.filter(({ toolResult }) => toolResult).map(({ toolResult }) => /Answer to (\w+)/.exec(toolResult)[1]).sort(), ["First", "Second"]);
+
+  // A queued child can be stopped without waiting for another child's answer.
+  ctx.ui.custom = () => new Promise(() => {});
+  plan(ask(question("Which parser?")), ask(question("Which lexer?")));
+  const blocking = await run("Open question", { async: true });
+  await settle();
+  const queued = await run("Queued question", { agent: "scribe", async: true });
+  await settle();
+  const stop = (runId) => tool.execute("stop", { action: "stop", runId }, new AbortController().signal, undefined, ctx);
+  const stopping = stop(queued.details.run.id);
+  const stoppedPromptly = await Promise.race([stopping.then(() => true), settle(250).then(() => false)]);
+  await stop(blocking.details.run.id);
+  await stopping;
+  assert.equal(stoppedPromptly, true, "queued stop must not depend on another user's answer");
+  assert.equal(streams.splice(0).length, 2);
+
+  // RPC dialogs receive the child's abort signal as well.
+  ctx.mode = "rpc";
+  ctx.ui.input = async () => undefined;
+  let dialogSignal;
+  ctx.ui.select = (_title, _options, options) => new Promise((resolve) => {
+    dialogSignal = options?.signal;
+    dialogSignal?.addEventListener("abort", () => resolve(undefined), { once: true });
+  });
+  plan(ask(question("Which parser?")));
+  asking = await run("RPC question", { async: true });
+  await settle();
+  assert.ok(dialogSignal, "RPC dialog needs an abort signal");
+  await stop(asking.details.run.id);
+  assert.equal(dialogSignal.aborted, true);
+  assert.equal(streams.splice(0).length, 1);
+  ctx.mode = "tui";
+  delete ctx.ui.select;
+  delete ctx.ui.input;
+
+  // Shutdown dismisses the real questionnaire component and settles the run.
+  const closed = [];
+  const theme = new Proxy({}, { get: () => (_color, text = "") => String(text) });
+  ctx.ui.custom = (factory) => new Promise((resolve) => {
+    opened.push(factory({ requestRender() {}, terminal: { columns: 80, rows: 24 } }, theme, { matches: () => false }, (value) => { closed.push(value); resolve(value); }));
+  });
+  plan(ask(question("Which parser?")), { text: "MUST_NOT_RUN" });
+  asking = await run("Shutdown question", { async: true });
+  await settle();
+  assert.equal(opened.length, 2);
+  await Promise.all(extension.handlers.get("session_shutdown").map((handler) => handler({ type: "session_shutdown" }, ctx)));
+  assert.equal((await status(asking.details.run.id))[0].status, "aborted");
+  assert.deepEqual(closed, [{ answers: [], cancelled: true }], "the open overlay was closed");
+  assert.equal(streams.splice(0).length, 1);
   console.log("subagents decision model test passed (no API calls)");
 } finally {
   globalThis.fetch = realFetch;

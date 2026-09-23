@@ -140,8 +140,8 @@ export function recordRunSession(report: RunReport, sessionPath: string, model: 
   saveRunReport(report);
 }
 
-export function pauseRunReport(report: RunReport, model: string, thinking: string, questions: string[]): void {
-  Object.assign(report, { status: "waiting", model, thinking, questions });
+export function pauseRunReport(report: RunReport, questions: string[]): void {
+  Object.assign(report, { status: "waiting", questions });
   saveRunReport(report);
 }
 

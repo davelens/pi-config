@@ -16,7 +16,6 @@
     "npm:@juicesharp/rpiv-ask-user-question",
     "npm:pi-agent-loop",
     "npm:pi-execution-time",
-    "npm:pi-mcp-adapter",
     "npm:pi-rewind",
     "npm:pi-tool-display",
     "npm:pi-powerline",

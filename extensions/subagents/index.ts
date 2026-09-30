@@ -30,14 +30,12 @@ import { promptChild } from "./prompt-child.ts";
 import { acquireMutationLock, finishRunReport, pauseRunReport, recordRunSession, recordRunWarning, resumeRunReport, startRunReport, type RunReport } from "./reports.ts";
 import { captureRunMessage, trackRun, waitForRun, type ActiveRun } from "./run-stream.ts";
 import { SubagentStatus } from "./status.ts";
-import { promptTypeSafeKey, readTypeSafeKey, writeTypeSafeKey } from "./typesafe-key.ts";
 
 const DEFAULT_AGENTS = fileURLToPath(new URL("./default-agents", import.meta.url));
 const AGENTS_DIRECTORY = join(homedir(), ".config", "agents", "pi");
 const REPORTS_DIRECTORY = join(AGENTS_DIRECTORY, "reports");
 const CHILD_SESSIONS_DIRECTORY = join(AGENTS_DIRECTORY, "subagent-sessions");
 const GLOBAL_SETTINGS = join(getAgentDir(), "settings.json");
-const TYPESAFE_CREDENTIALS = join(getAgentDir(), "typesafe-credentials.json");
 const GUARDRAILS_EXTENSION = join(getAgentDir(), "npm", "node_modules", "@aliou", "pi-guardrails", "extensions", "guardrails", "index.ts");
 const CLAUDE_BRIDGE_EXTENSION = join(getAgentDir(), "git", "github.com", "elidickinson", "pi-claude-bridge", "src", "index.ts");
 const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
@@ -311,13 +309,14 @@ async function runAttempt(agent: AgentConfig, task: string, cwd: string, target:
 }
 
 async function routeRun(agent: AgentConfig, task: string, signal: AbortSignal, timeoutMs: number, ctx: ExtensionContext): Promise<RunAttemptTarget | undefined> {
-  const apiKey = readTypeSafeKey(TYPESAFE_CREDENTIALS);
-  if (!apiKey) throw new Error("No TypeSafe API key; run /subagent-decision-model on or set TYPESAFE_API_KEY");
+  const classifier = ctx.modelRegistry.getModelOfType("classifier", "typesafe", "jev-latest");
+  if (!classifier) throw new Error("TypeSafe Jev classifier is unavailable; use /login typesafe");
   return chooseModel({
     task,
     agent: { name: agent.name, description: agent.description, tools: agent.tools, model: agent.model, thinking: agent.thinking },
     candidates: decisionCandidates(ctx.scopedModels ?? [], ctx.modelRegistry.getAvailable()),
-    apiKey,
+    classifier,
+    classify: (model, context, options) => ctx.modelRegistry.classify(model, context, options),
     signal,
     timeoutMs,
   });
@@ -462,7 +461,7 @@ export default function subagents(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("subagent-decision-model", {
-    description: "Show or toggle Jev routing, or save its API key (on|off|key, global)",
+    description: "Show or toggle Jev routing, or show native TypeSafe login guidance (on|off|key, global)",
     handler: async (args: string, ctx: ExtensionCommandContext) => {
       const argument = args.trim();
       if (argument && !["on", "off", "key"].includes(argument)) {
@@ -471,17 +470,14 @@ export default function subagents(pi: ExtensionAPI) {
       }
       try {
         readDecisionModel(GLOBAL_SETTINGS);
-        if (argument === "key" || (argument === "on" && !readTypeSafeKey(TYPESAFE_CREDENTIALS))) {
-          const key = await promptTypeSafeKey(ctx);
-          if (!key) {
-            ctx.ui.notify("TypeSafe key entry cancelled; routing setting unchanged", "info");
-            return;
-          }
-          writeTypeSafeKey(TYPESAFE_CREDENTIALS, key);
-          ctx.ui.notify(`TypeSafe API key saved to ${TYPESAFE_CREDENTIALS}${process.env.TYPESAFE_API_KEY?.trim() ? "; TYPESAFE_API_KEY still takes precedence" : ""}`, "info");
+        if (argument === "key") {
+          ctx.ui.notify("Use /login typesafe to configure native TypeSafe authentication.", "info");
+          return;
         }
         if (argument === "on" || argument === "off") writeDecisionModel(GLOBAL_SETTINGS, argument === "on");
-        ctx.ui.notify(`Subagent decision model is ${readDecisionModel(GLOBAL_SETTINGS) ? "on" : "off"} (global: ${GLOBAL_SETTINGS})`, "info");
+        const nativeAuth = argument === "on" && ctx.modelRegistry.getProviderAuthStatus("typesafe").configured;
+        if (argument === "on" && !nativeAuth) ctx.ui.notify("Jev routing is on, but TypeSafe authentication may be missing; use /login typesafe or set TYPESAFE_API_KEY.", "warning");
+        else ctx.ui.notify(`Subagent decision model is ${readDecisionModel(GLOBAL_SETTINGS) ? "on" : "off"} (global: ${GLOBAL_SETTINGS})`, "info");
       } catch (error) {
         ctx.ui.notify(`Could not ${argument ? "update" : "read"} the subagent decision model setting: ${error instanceof Error ? error.message : String(error)}`, "error");
       }

@@ -1,14 +1,11 @@
 import { existsSync, readFileSync } from "node:fs";
-import { getSupportedThinkingLevels, type Api, type Model } from "@earendil-works/pi-ai";
+import { getSupportedThinkingLevels, type Api, type ClassifierApi, type ClassifierContext, type ClassifierModel, type ClassifierResult, type Model, type ModelsClassifierOptions } from "@earendil-works/pi-ai";
 import { atomicWrite } from "./agent-files.ts";
 import type { ThinkingLevel } from "./agents.ts";
 
-export const DECISION_ENDPOINT = "https://api.typesafe.ai/v1/systemone";
 export const DECISION_TIMEOUT_MS = 5000;
-const DECISION_MODEL = "jev-latest";
 const MAX_CHOICES = 255;
 const DEFAULTS_CHOICE = "defaults";
-// Local llama.cpp inventories are not routing candidates: `llamacpp` is the models.json custom provider, `llama.cpp` Pi's native one.
 export const EXCLUDED_PROVIDERS = new Set(["llamacpp", "llama.cpp", "llama-cpp"]);
 
 export interface DecisionCandidate {
@@ -33,10 +30,10 @@ export interface DecisionRequest {
   task: string;
   agent: DecisionAgent;
   candidates: DecisionCandidate[];
-  apiKey: string;
   signal: AbortSignal;
   timeoutMs: number;
-  fetch?: typeof fetch;
+  classifier?: ClassifierModel<ClassifierApi>;
+  classify?: (classifier: ClassifierModel<ClassifierApi>, context: ClassifierContext, options: ModelsClassifierOptions) => Promise<ClassifierResult>;
 }
 
 const INSTRUCTIONS = [
@@ -94,7 +91,7 @@ export async function chooseModel(request: DecisionRequest): Promise<DecisionCho
   if (!candidates.length) throw new Error("No routable models are available");
   if (candidates.length + 1 > MAX_CHOICES) throw new Error(`${candidates.length} model/thinking pairs exceed the ${MAX_CHOICES - 1} choice limit`);
   const options = new Map(candidates.map((candidate, index) => [`option${index}`, candidate]));
-  const criteria: Record<string, unknown> = Object.fromEntries([...options].map(([id, { model, thinking }]) => [id, {
+  const criteria = Object.fromEntries([...options].map(([id, { model, thinking }]) => [id, JSON.stringify({
     model: `${model.provider}/${model.id}`,
     name: model.name,
     thinking,
@@ -102,31 +99,21 @@ export async function chooseModel(request: DecisionRequest): Promise<DecisionCho
     contextWindow: model.contextWindow,
     maxTokens: model.maxTokens,
     costPerMillion: { input: model.cost.input, output: model.cost.output },
-  }]));
-  criteria[DEFAULTS_CHOICE] = { useAgentDefaults: true, model: request.agent.model ?? "parent model", thinking: request.agent.thinking ?? "Pi default" };
-  const body = JSON.stringify({
-    model: DECISION_MODEL,
-    state: {
-      task: request.task,
-      agent: { name: request.agent.name, description: request.agent.description, tools: request.agent.tools },
-    },
+  })]));
+  criteria[DEFAULTS_CHOICE] = JSON.stringify({ useAgentDefaults: true, model: request.agent.model ?? "parent model", thinking: request.agent.thinking ?? "Pi default" });
+  const classifier = request.classifier;
+  const classify = request.classify;
+  if (!classifier || !classify) throw new Error("TypeSafe Jev classifier is unavailable; use /login typesafe");
+  if (request.signal.aborted) throw request.signal.reason;
+  const signal = AbortSignal.any([request.signal, AbortSignal.timeout(Math.max(1, request.timeoutMs))]);
+  const result = await classify(classifier, {
+    state: { task: request.task, agent: { name: request.agent.name, description: request.agent.description, tools: request.agent.tools } },
     questions: { route: { type: "choice", instructions: INSTRUCTIONS, criteria } },
-  });
-
-  const response = await (request.fetch ?? fetch)(DECISION_ENDPOINT, {
-    method: "POST",
-    headers: { authorization: `Bearer ${request.apiKey}`, "content-type": "application/json" },
-    body,
-    signal: AbortSignal.any([request.signal, AbortSignal.timeout(request.timeoutMs)]),
-  });
-  if (!response.ok) throw new Error(`TypeSafe request failed with HTTP ${response.status}`);
-  let answer: unknown;
-  try {
-    answer = ((await response.json()) as { answers?: Record<string, unknown> }).answers?.route;
-  } catch {
-    throw new Error("TypeSafe returned an unreadable response");
-  }
-  const choice = answer && typeof answer === "object" && (answer as { type?: unknown }).type === "choice" ? (answer as { choice?: unknown }).choice : undefined;
+  }, { signal });
+  if (request.signal.aborted) throw request.signal.reason;
+  if (signal.aborted) throw signal.reason;
+  if (result.stopReason !== "stop") throw new Error(result.stopReason === "aborted" ? "TypeSafe classification was aborted" : "TypeSafe classification failed; check /login typesafe or TYPESAFE_API_KEY");
+  const choice = result.answers?.route?.type === "choice" ? result.answers.route.choice : undefined;
   if (typeof choice !== "string" || (choice !== DEFAULTS_CHOICE && !options.has(choice))) throw new Error("TypeSafe returned an invalid routing answer");
   const selected = options.get(choice);
   return selected ? { model: `${selected.model.provider}/${selected.model.id}`, thinking: selected.thinking } : undefined;

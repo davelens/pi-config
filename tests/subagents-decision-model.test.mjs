@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -22,12 +22,9 @@ const jiti = createJiti(import.meta.url, { alias: {
   "@earendil-works/pi-tui": join(piRoot, "node_modules/@earendil-works/pi-tui/dist/index.js"),
 } });
 const { chooseModel, decisionCandidates, readDecisionModel, writeDecisionModel } = await jiti.import(join(repo, "extensions/subagents/decision-model.ts"));
-const { readTypeSafeKey, writeTypeSafeKey } = await jiti.import(join(repo, "extensions/subagents/typesafe-key.ts"));
-const { visibleWidth } = await jiti.import(join(piRoot, "node_modules/@earendil-works/pi-tui/dist/index.js"));
-const model = (provider, id, extra = {}) => ({ id, name: id, api: "openai-completions", provider, baseUrl: "http://127.0.0.1:9", reasoning: false, input: ["text"], cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 }, contextWindow: 128000, maxTokens: 8192, ...extra });
 const realFetch = globalThis.fetch;
-const noFetch = () => { throw new Error("network access is not allowed in this test"); };
-globalThis.fetch = noFetch;
+globalThis.fetch = () => { throw new Error("Network access is not allowed in this test"); };
+const model = (provider, id, extra = {}) => ({ id, name: id, api: "openai-completions", provider, baseUrl: "http://127.0.0.1:9", reasoning: false, input: ["text"], cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 }, contextWindow: 128000, maxTokens: 8192, ...extra });
 
 // Settings persistence.
 {
@@ -51,26 +48,6 @@ globalThis.fetch = noFetch;
   assert.throws(() => writeDecisionModel(settingsPath, true), /JSON object/);
 }
 
-// Credentials stay local, owner-only, and never appear in errors.
-{
-  const path = join(root, "typesafe-credentials.json");
-  assert.equal(readTypeSafeKey(path), undefined);
-  writeTypeSafeKey(path, "  saved-secret  ");
-  assert.equal(readTypeSafeKey(path), "saved-secret");
-  assert.equal(statSync(path).mode & 0o777, 0o600);
-  process.env.TYPESAFE_API_KEY = " env-secret ";
-  assert.equal(readTypeSafeKey(path), "env-secret");
-  delete process.env.TYPESAFE_API_KEY;
-  assert.throws(() => writeTypeSafeKey(path, "bad\nsecret"), /no whitespace/);
-  assert.equal(readTypeSafeKey(path), "saved-secret", "invalid input preserves the saved key");
-  writeFileSync(path, "corrupt-secret");
-  assert.throws(() => readTypeSafeKey(path), (error) => !error.message.includes("corrupt-secret"));
-  writeTypeSafeKey(path, "replacement-secret");
-  assert.equal(readTypeSafeKey(path), "replacement-secret");
-  assert.equal(statSync(path).mode & 0o777, 0o600);
-  assert.throws(() => writeTypeSafeKey(join(root, "missing", "key.json"), "secret"), /Could not save/);
-}
-
 // Candidate filtering, exclusions, pins, and thinking maps.
 {
   const cheap = model("openai", "cheap");
@@ -91,50 +68,37 @@ globalThis.fetch = noFetch;
   assert.deepEqual(decisionCandidates([{ model: cheap }], []), []);
 }
 
-// Jev request shape, answer validation, and failure modes.
+// Native classifier context, answer validation, and abort behavior.
 {
   const cheap = model("openai", "cheap");
   const smart = model("openai", "smart", { reasoning: true });
   const candidates = decisionCandidates([], [cheap, smart]);
+  const classifier = { id: "jev-latest", provider: "typesafe" };
   const agent = { name: "worker", description: "Builds things", tools: ["read", "edit"], model: "openai/cheap", thinking: "low" };
-  const requests = [];
-  const respond = (payload, status = 200) => async (url, init) => {
-    requests.push({ url, init });
-    init.signal.throwIfAborted();
-    return { ok: status < 400, status, json: async () => payload };
-  };
-  const base = { task: "Refactor the parser", agent, candidates, apiKey: "secret-key", signal: new AbortController().signal, timeoutMs: 1000 };
-
-  const chosen = await chooseModel({ ...base, fetch: respond({ answers: { route: { type: "choice", choice: "option5", confidence: 0.2, probabilities: {} } } }) });
-  assert.deepEqual(chosen, { model: "openai/smart", thinking: "high" }, "low confidence answers are still accepted");
-  const [{ url, init }] = requests;
-  assert.equal(url, "https://api.typesafe.ai/v1/systemone");
-  assert.equal(init.method, "POST");
-  assert.equal(init.headers.authorization, "Bearer secret-key");
-  const body = JSON.parse(init.body);
-  assert.equal(body.model, "jev-latest");
-  assert.deepEqual(body.state, { task: "Refactor the parser", agent: { name: "worker", description: "Builds things", tools: ["read", "edit"] } });
-  assert.equal(body.questions.route.type, "choice");
-  assert.match(body.questions.route.instructions, /Price is not a quality signal/);
-  assert.deepEqual(Object.keys(body.questions.route.criteria), ["option0", "option1", "option2", "option3", "option4", "option5", "defaults"]);
-  assert.deepEqual(body.questions.route.criteria.option5, { model: "openai/smart", name: "smart", thinking: "high", reasoning: true, contextWindow: 128000, maxTokens: 8192, costPerMillion: { input: 1, output: 2 } });
-  assert.deepEqual(body.questions.route.criteria.defaults, { useAgentDefaults: true, model: "openai/cheap", thinking: "low" });
-  assert.doesNotMatch(init.body, /secret-key|baseUrl|127\.0\.0\.1/);
-
-  assert.equal(await chooseModel({ ...base, fetch: respond({ answers: { route: { type: "choice", choice: "defaults", confidence: 0.9, probabilities: {} } } }) }), undefined, "defaults choice is a no-match outcome");
-  await assert.rejects(chooseModel({ ...base, fetch: respond({ answers: { route: { type: "choice", choice: "option99", confidence: 1, probabilities: {} } } }) }), /invalid routing answer/);
-  await assert.rejects(chooseModel({ ...base, fetch: respond({ answers: {} }) }), /invalid routing answer/);
-  await assert.rejects(chooseModel({ ...base, fetch: respond({ error: "nope" }, 401) }), /HTTP 401/);
-  await assert.rejects(chooseModel({ ...base, fetch: async () => ({ ok: true, status: 200, json: async () => { throw new SyntaxError("bad"); } }) }), /unreadable response/);
+  const base = { task: "Refactor the parser", agent, candidates, classifier, signal: new AbortController().signal, timeoutMs: 1000 };
+  let received;
+  const classify = async (_model, context, options) => { received = { context, options }; return { stopReason: "stop", answers: { route: { type: "choice", choice: "option5", confidence: 0.2 } } }; };
+  assert.deepEqual(await chooseModel({ ...base, classify }), { model: "openai/smart", thinking: "high" });
+  assert.deepEqual(received.context.state, { task: "Refactor the parser", agent: { name: "worker", description: "Builds things", tools: ["read", "edit"] } });
+  assert.equal(received.context.questions.route.criteria.option5.includes('"thinking":"high"'), true);
+  assert.equal(JSON.parse(received.context.questions.route.criteria.defaults).useAgentDefaults, true);
+  assert.ok(received.options.signal instanceof AbortSignal);
+  assert.ok(Object.values(received.context.questions.route.criteria).every((value) => typeof value === "string"));
+  assert.doesNotMatch(JSON.stringify(received.context), /baseUrl|127\.0\.0\.1/);
+  assert.equal(await chooseModel({ ...base, classify: async () => ({ stopReason: "stop", answers: { route: { type: "choice", choice: "defaults" } } }) }), undefined);
+  await assert.rejects(chooseModel({ ...base, classify: async () => ({ stopReason: "error", errorMessage: "sensitive response body" }) }), (error) => /check \/login typesafe/.test(error.message) && !error.message.includes("sensitive response body"));
+  await assert.rejects(chooseModel({ ...base, classify: async () => ({ stopReason: "aborted", answers: {} }) }), /classification was aborted/);
+  await assert.rejects(chooseModel({ ...base, classify: async () => ({ stopReason: "stop", answers: {} }) }), /invalid routing answer/);
+  await assert.rejects(chooseModel({ ...base, classify: async () => ({ stopReason: "stop", answers: { route: { type: "choice", choice: "outside-pool" } } }) }), /invalid routing answer/);
+  await assert.rejects(chooseModel({ ...base, classifier: undefined, classify }), /classifier is unavailable/);
   await assert.rejects(chooseModel({ ...base, candidates: [] }), /No routable models/);
-  await assert.rejects(chooseModel({ ...base, candidates: Array.from({ length: 255 }, () => candidates[0]) }), /exceed the 254 choice limit/);
-  const keepAlive = setTimeout(() => {}, 5000); // AbortSignal.timeout does not keep the event loop alive.
-  await assert.rejects(chooseModel({ ...base, timeoutMs: 5, fetch: (_url, init) => new Promise((_resolve, reject) => init.signal.addEventListener("abort", () => reject(init.signal.reason))) }), { name: "TimeoutError" });
-  clearTimeout(keepAlive);
+  await assert.rejects(chooseModel({ ...base, candidates: Array.from({ length: 255 }, () => candidates[0]), classify }), /exceed the 254 choice limit/);
   const aborter = new AbortController();
-  const aborted = chooseModel({ ...base, signal: aborter.signal, fetch: (_url, init) => new Promise((_resolve, reject) => init.signal.addEventListener("abort", () => reject(init.signal.reason))) });
   aborter.abort();
-  await assert.rejects(aborted, { name: "AbortError" });
+  await assert.rejects(chooseModel({ ...base, signal: aborter.signal, classify }), { name: "AbortError" });
+  const keepAlive = setTimeout(() => {}, 20);
+  await assert.rejects(chooseModel({ ...base, timeoutMs: 5, classify: (_model, _context, { signal }) => new Promise((resolve) => signal.addEventListener("abort", () => resolve({ stopReason: "aborted", answers: {} }))) }), { name: "TimeoutError" });
+  clearTimeout(keepAlive);
 }
 
 // The actual runner: override, fallback safety, async cancellation, and parent questionnaires.
@@ -207,68 +171,28 @@ try {
   };
   const run = (task, extra = {}) => tool.execute(`run-${Math.random()}`, { action: "run", agent: "oracle", task, ...extra }, new AbortController().signal, undefined, ctx);
   const originalDefinition = readFileSync(join(managed, "oracle.md"), "utf8");
-  let fetchCalls = 0;
-  const jevAnswer = (choice) => async (_url, init) => {
-    fetchCalls++;
-    init.signal.throwIfAborted();
-    const ids = Object.keys(JSON.parse(init.body).questions.route.criteria);
-    const selected = choice(ids, init);
-    return { ok: true, status: 200, json: async () => ({ answers: { route: { type: "choice", choice: selected, confidence: 0.5, probabilities: {} } } }) };
+  let classifyCalls = 0;
+  registry.getModelOfType = (...args) => {
+    assert.deepEqual(args, ["classifier", "typesafe", "jev-latest"]);
+    return { id: "jev-latest", provider: "typesafe" };
   };
+  const jevAnswer = (choice) => async (_classifier, context, options) => {
+    classifyCalls++;
+    options.signal.throwIfAborted();
+    const ids = Object.keys(context.questions.route.criteria);
+    return { stopReason: "stop", answers: { route: { type: "choice", choice: choice(ids, context), confidence: 0.5, probabilities: {} } } };
+  };
+  registry.classify = (...args) => currentClassifier(...args);
+  let currentClassifier = async () => ({ stopReason: "error", errorMessage: "credentials not configured" });
 
-  // Command: hidden key prompt, cancellation, persistence, rotation, and headless use.
   await command.handler("", ctx);
   assert.match(notices.at(-1), /^info: Subagent decision model is off/);
   await command.handler("maybe", ctx);
   assert.match(notices.at(-1), /^error: Usage/);
-  await command.handler("on", ctx);
-  assert.match(notices.at(-1), /Set TYPESAFE_API_KEY.*TUI/);
-  assert.equal(readDecisionModel(join(agentDir, "settings.json")), false);
-  ctx.mode = "tui";
-  let entry;
-  let prompts = 0;
-  ctx.ui.custom = async (factory) => {
-    prompts++;
-    let value;
-    const component = factory({ requestRender() {} }, { fg: (_color, text) => text }, {}, (result) => { value = result; });
-    component.handleInput(entry === undefined ? "\x1b" : `\x1b[200~${entry}\x1b[201~`);
-    for (const width of [1, 20, 80]) {
-      const lines = component.render(width);
-      if (entry) assert.ok(!lines.join("\n").includes(entry), "secret must never render");
-      assert.ok(lines.every((line) => visibleWidth(line) <= width));
-    }
-    if (entry !== undefined) component.handleInput("\r");
-    return value;
-  };
-  await command.handler("on", ctx);
-  assert.match(notices.at(-1), /cancelled/);
-  assert.equal(readDecisionModel(join(agentDir, "settings.json")), false);
-  entry = "";
-  await command.handler("on", ctx);
-  assert.equal(readDecisionModel(join(agentDir, "settings.json")), false);
-  entry = "prompt-secret";
-  await command.handler("on", ctx);
-  assert.match(notices.at(-1), /^info: Subagent decision model is on/);
-  const credentialsPath = join(agentDir, "typesafe-credentials.json");
-  assert.equal(readTypeSafeKey(credentialsPath), entry);
-  assert.equal(statSync(credentialsPath).mode & 0o777, 0o600);
-  assert.equal(readDecisionModel(join(agentDir, "settings.json")), true);
-  assert.doesNotMatch(readFileSync(join(agentDir, "settings.json"), "utf8"), /prompt-secret/);
-  const promptCount = prompts;
-  await command.handler("on", ctx);
-  assert.equal(prompts, promptCount, "saved credentials avoid prompting");
-  await command.handler("off", ctx);
-  entry = "rotated-secret";
   await command.handler("key", ctx);
-  assert.equal(readTypeSafeKey(credentialsPath), entry);
-  assert.equal(readDecisionModel(join(agentDir, "settings.json")), false, "key rotation does not toggle routing");
-  assert.ok(!notices.join("\n").includes(entry));
-  assert.ok(!notices.join("\n").includes("prompt-secret"));
-  rmSync(credentialsPath);
-  process.env.TYPESAFE_API_KEY = "env-secret";
+  assert.match(notices.at(-1), /\/login typesafe/);
   await command.handler("on", ctx);
-  assert.equal(prompts, promptCount + 1, "environment key avoids prompting");
-  delete process.env.TYPESAFE_API_KEY;
+  assert.equal(readDecisionModel(join(agentDir, "settings.json")), true);
 
   // Disabled: no key, no network, configured defaults.
   await command.handler("off", ctx);
@@ -278,26 +202,24 @@ try {
   assert.match(result.content[0].text, /Model: fake\/cheap \(thinking: off\)/);
   assert.equal(result.details.thinking, "off");
   assert.deepEqual(streams.splice(0), [{ model: "fake/cheap", reasoning: undefined }]);
-  assert.equal(fetchCalls, 0);
+  assert.equal(classifyCalls, 0);
 
   // Enabled without a key: warns, keeps defaults, and stores the warning in the report.
   writeDecisionModel(join(agentDir, "settings.json"), true);
   script = [{ text: "DEFAULT_OK" }];
   result = await run("Say hi again");
   assert.match(result.content[0].text, /DEFAULT_OK/);
-  assert.match(result.content[0].text, /Warning: Model routing failed, using configured defaults: No TypeSafe API key/);
-  assert.match(readFileSync(result.details.report, "utf8"), /- Warning: Model routing failed.*No TypeSafe API key/);
+  assert.match(result.content[0].text, /Warning: Model routing failed, using configured defaults: .*check \/login typesafe/);
+  assert.match(readFileSync(result.details.report, "utf8"), /- Warning: Model routing failed.*check \/login typesafe/);
   assert.match(notices.at(-1), /^warning: oracle: Model routing failed/);
   assert.deepEqual(streams.splice(0), [{ model: "fake/cheap", reasoning: undefined }]);
-  assert.equal(fetchCalls, 0);
+  assert.equal(classifyCalls, 0);
 
   // Routed override: Jev picks the pinned smart/high pair, definitions stay untouched.
-  writeTypeSafeKey(credentialsPath, "test-key");
-  globalThis.fetch = jevAnswer((ids, init) => {
-    assert.equal(init.headers.authorization, "Bearer test-key", "runner uses the persisted key");
-    const criteria = JSON.parse(init.body).questions.route.criteria;
-    assert.deepEqual(ids.map((id) => criteria[id].useAgentDefaults ? "defaults" : criteria[id].model), ["fake/cheap", "fake/smart", "defaults"], "scope intersects availability and honors the pin");
-    assert.equal(criteria[ids[1]].thinking, "high");
+  currentClassifier = jevAnswer((ids, context) => {
+    const criteria = context.questions.route.criteria;
+    assert.deepEqual(ids.map((id) => JSON.parse(criteria[id]).useAgentDefaults ? "defaults" : JSON.parse(criteria[id]).model), ["fake/cheap", "fake/smart", "defaults"], "scope intersects availability and honors the pin");
+    assert.equal(JSON.parse(criteria[ids[1]]).thinking, "high");
     return ids[1];
   });
   script = [{ text: "SMART_OK" }];
@@ -305,7 +227,7 @@ try {
   assert.match(result.content[0].text, /SMART_OK/);
   assert.match(result.content[0].text, /Model: fake\/smart \(thinking: high\)/);
   assert.doesNotMatch(result.content[0].text, /Warning/);
-  assert.equal(fetchCalls, 1);
+  assert.equal(classifyCalls, 1);
   assert.deepEqual(streams.splice(0), [{ model: "fake/smart", reasoning: "high" }]);
   const report = readFileSync(result.details.report, "utf8");
   assert.match(report, /- Model: fake\/smart\n- Thinking: high/);
@@ -314,7 +236,7 @@ try {
   assert.match(listed.content[0].text, /model=fake\/cheap; fallbacks=fake\/spare/);
 
   // Fallback safety: a failing routed attempt falls back to the configured chain with its original thinking.
-  globalThis.fetch = jevAnswer((ids) => ids[1]);
+  currentClassifier = jevAnswer((ids) => ids[1]);
   script = [{ error: "smart is down" }, { text: "FALLBACK_OK" }];
   result = await run("Explain the parser");
   assert.match(result.content[0].text, /FALLBACK_OK/);
@@ -323,7 +245,7 @@ try {
   assert.equal(result.details.sessions.length, 2);
 
   // A routed model that is also configured is not attempted twice.
-  globalThis.fetch = jevAnswer((ids) => ids[0]);
+  currentClassifier = jevAnswer((ids) => ids[0]);
   script = [{ error: "cheap is down" }, { text: "SPARE_OK" }];
   result = await run("Explain the lexer");
   assert.match(result.content[0].text, /SPARE_OK/);
@@ -338,26 +260,26 @@ try {
   writeFileSync(join(managed, "oracle.md"), originalDefinition);
 
   // Jev defaults choice keeps configured defaults without a warning.
-  globalThis.fetch = jevAnswer(() => "defaults");
+  currentClassifier = jevAnswer(() => "defaults");
   script = [{ text: "DEFAULTS_CHOICE_OK" }];
   result = await run("Say hi");
   assert.match(result.content[0].text, /DEFAULTS_CHOICE_OK/);
   assert.doesNotMatch(result.content[0].text, /Warning/);
   assert.deepEqual(streams.splice(0), [{ model: "fake/cheap", reasoning: undefined }]);
 
-  // HTTP failure warns and keeps defaults.
-  globalThis.fetch = async () => ({ ok: false, status: 503, json: async () => ({}) });
+  // Native classifier failure warns and keeps defaults.
+  currentClassifier = async () => ({ stopReason: "error", errorMessage: "sensitive response body" });
   script = [{ text: "HTTP_FALLBACK_OK" }];
   result = await run("Say hi");
   assert.match(result.content[0].text, /HTTP_FALLBACK_OK/);
-  assert.match(result.content[0].text, /Warning: Model routing failed.*HTTP 503/);
+  assert.match(result.content[0].text, /Warning: Model routing failed.*check \/login typesafe/);
   assert.deepEqual(streams.splice(0), [{ model: "fake/cheap", reasoning: undefined }]);
 
   // Async: returns while routing is pending; stop aborts the routing request instead of falling back.
   let routingSignal;
-  globalThis.fetch = (_url, init) => new Promise((_resolve, reject) => {
-    routingSignal = init.signal;
-    init.signal.addEventListener("abort", () => reject(init.signal.reason));
+  currentClassifier = (_classifier, _context, options) => new Promise((resolve) => {
+    routingSignal = options.signal;
+    options.signal.addEventListener("abort", () => resolve({ stopReason: "aborted", answers: {} }));
   });
   script = [{ text: "SHOULD_NOT_RUN" }];
   const started = await run("Slow routing", { async: true });
@@ -373,8 +295,8 @@ try {
   assert.deepEqual(streams.splice(0), []);
 
   // Parent questions open the installed questionnaire; the user's answer reaches the same child turn without routing again.
-  fetchCalls = 0;
-  globalThis.fetch = jevAnswer((ids) => ids[1]);
+  classifyCalls = 0;
+  currentClassifier = jevAnswer((ids) => ids[1]);
   const question = (text, header = "Parser") => ({ question: text, header, options: [{ label: "New", description: "The rewritten parser" }, { label: "Old", description: "The legacy parser" }] });
   const ask = (...questions) => ({ toolCall: { name: "contact_parent", arguments: { questions } } });
   const asked = [];
@@ -399,7 +321,7 @@ try {
   result = await run("Pick a parser");
   assert.match(result.content[0].text, /ANSWERED_OK/);
   assert.match(result.content[0].text, /Model: fake\/smart \(thinking: high\)/);
-  assert.equal(fetchCalls, 1, "answering does not route again");
+  assert.equal(classifyCalls, 1, "answering does not route again");
   let seen = streams.splice(0);
   assert.deepEqual(seen.map(({ model }) => model), ["fake/smart", "fake/smart"]);
   assert.match(seen[1].toolResult, /"Which parser\?"="New"/, "the user's answer is the child's tool result");
@@ -539,6 +461,5 @@ try {
   console.log("subagents decision model test passed (no API calls)");
 } finally {
   globalThis.fetch = realFetch;
-  delete process.env.TYPESAFE_API_KEY;
   session?.dispose();
 }

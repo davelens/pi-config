@@ -4,10 +4,12 @@
   "defaultModel": "gpt-6-astra",
   "defaultProvider": "openai-codex",
   "defaultThinkingLevel": "high",
-  "defaultTools": ["+codemode"],
+  "defaultTools": [
+    "+codemode"
+  ],
   "editorPaddingX": 1,
   "hideThinkingBlock": true,
-  "lastChangelogVersion": "0.99.1",
+  "lastChangelogVersion": "0.99.2",
   "packages": [
     "git:github.com/DietrichGebert/ponytail",
     "git:github.com/elidickinson/pi-claude-bridge",

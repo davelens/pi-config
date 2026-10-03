@@ -440,7 +440,7 @@ export default function subagents(pi: ExtensionAPI) {
     for (const run of runs.values()) cleanupRun(run.report.id);
   });
 
-  pi.registerCommand("subagent-history", {
+  pi.registerCommand("subagents-history", {
     description: "View subagent runs recorded in this session",
     handler: async (_args: string, ctx: ExtensionCommandContext) => {
       const history = loadRunHistory(ctx.sessionManager, runs);
@@ -489,12 +489,12 @@ export default function subagents(pi: ExtensionAPI) {
     },
   });
 
-  pi.registerCommand("subagent-decision-model", {
+  pi.registerCommand("subagents-decision-model", {
     description: "Show or toggle Jev routing, or show native TypeSafe login guidance (on|off|key, global)",
     handler: async (args: string, ctx: ExtensionCommandContext) => {
       const argument = args.trim();
       if (argument && !["on", "off", "key"].includes(argument)) {
-        ctx.ui.notify("Usage: /subagent-decision-model [on|off|key]", "error");
+        ctx.ui.notify("Usage: /subagents-decision-model [on|off|key]", "error");
         return;
       }
       try {

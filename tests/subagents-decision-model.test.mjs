@@ -162,7 +162,8 @@ try {
   writeFileSync(join(managed, "oracle.md"), "---\nname: oracle\ndescription: Test oracle\nmodel: fake/cheap\nfallbackModels: fake/spare\nthinking: low\ntools: read\n---\nAnswer briefly.\n");
   const extension = loader.getExtensions().extensions.find((candidate) => candidate.tools.has("subagent"));
   const tool = extension.tools.get("subagent").definition;
-  const command = extension.commands.get("subagent-decision-model");
+  const command = extension.commands.get("subagents-decision-model");
+  assert.ok([...extension.commands.keys()].every((name) => !name.startsWith("subagent-")));
   const notices = [];
   const ctx = {
     cwd: root, sessionManager: session.sessionManager, modelRegistry: registry, model: session.model, isProjectTrusted: () => false,
@@ -471,7 +472,7 @@ try {
   assert.equal(latestHistory.get(firstHistory.id).output, "CHEAP_OK");
   assert.equal([...latestHistory.values()].find(({ task }) => task === "Blocked writer").status, "failed", "failures before trackRun are persisted");
   assert.equal([...latestHistory.values()].find(({ task }) => task === "Explain the parser").sessionPaths.length, 2);
-  const historyCommand = extension.commands.get("subagent-history");
+  const historyCommand = extension.commands.get("subagents-history");
   let renderedHistory;
   ctx.ui.custom = async (factory) => {
     renderedHistory = factory({ requestRender() {}, terminal: { rows: 40 } }, {

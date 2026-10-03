@@ -26,6 +26,7 @@ import { chooseModel, DECISION_TIMEOUT_MS, decisionCandidates, readDecisionModel
 import { buildDoctorReport } from "./doctor-report.ts";
 import { SubagentsDoctor } from "./doctor.ts";
 import { SubagentManager } from "./manager.ts";
+import { HISTORY_ENTRY, loadRunHistory } from "./history.ts";
 import { promptChild } from "./prompt-child.ts";
 import { acquireMutationLock, finishRunReport, pauseRunReport, recordRunSession, recordRunWarning, resumeRunReport, startRunReport, type RunReport } from "./reports.ts";
 import { captureRunMessage, trackRun, waitForRun, type ActiveRun } from "./run-stream.ts";
@@ -361,6 +362,9 @@ async function runAgent(agent: AgentConfig, task: string, cwd: string, signal: A
 export default function subagents(pi: ExtensionAPI) {
   ensureDefaultAgents(DEFAULT_AGENTS, AGENTS_DIRECTORY);
   const runs = new Map<string, ActiveRun>();
+  const saveHistory = (report: RunReport, ctx: ExtensionContext) => pi.appendEntry(HISTORY_ENTRY, {
+    parentSessionId: ctx.sessionManager.getSessionId(), report: structuredClone(report),
+  });
   const releases = new Map<string, () => void>();
   let questionnaire: Promise<ToolDefinition> | undefined;
   // ponytail: one questionnaire at a time across every child; queue order is arrival order.
@@ -373,11 +377,12 @@ export default function subagents(pi: ExtensionAPI) {
     releases.delete(runId);
   };
 
-  const executeRun = async (run: ActiveRun, runSignal: AbortSignal, operation: () => Promise<AgentResult>) => {
+  const executeRun = async (run: ActiveRun, runSignal: AbortSignal, ctx: ExtensionContext, operation: () => Promise<AgentResult>) => {
     try {
       const result = await operation();
       runSignal.throwIfAborted();
       finishRunReport(run.report, { status: "completed", model: result.model, thinking: result.thinking, output: result.output });
+      saveHistory(run.report, ctx);
       return result;
     } catch (error) {
       const failure = runSignal.aborted && runSignal.reason instanceof ParentQuestionError ? runSignal.reason : error;
@@ -385,6 +390,7 @@ export default function subagents(pi: ExtensionAPI) {
         status: failure instanceof ParentQuestionError ? failure.status : runSignal.aborted ? "aborted" : "failed",
         error: failure instanceof Error ? failure.message : String(failure),
       });
+      saveHistory(run.report, ctx);
       throw failure;
     } finally {
       cleanupRun(run.report.id);
@@ -432,6 +438,29 @@ export default function subagents(pi: ExtensionAPI) {
     }
     await Promise.allSettled([...runs.values()].map(({ promise }) => promise));
     for (const run of runs.values()) cleanupRun(run.report.id);
+  });
+
+  pi.registerCommand("subagent-history", {
+    description: "View subagent runs recorded in this session",
+    handler: async (_args: string, ctx: ExtensionCommandContext) => {
+      const history = loadRunHistory(ctx.sessionManager, runs);
+      if (!history.length) {
+        ctx.ui.notify("No subagent runs recorded in this session", "info");
+        return;
+      }
+      if (ctx.mode !== "tui") {
+        ctx.ui.notify(history.map(({ report }) => `${report.id} — ${report.agent}: ${report.status}\n${report.output ?? report.error ?? report.task}`).join("\n\n"), "info");
+        return;
+      }
+      try {
+        await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
+          refreshStatus = () => tui.requestRender();
+          return new SubagentStatus({ tui, theme, runs: () => history, done });
+        }, { overlay: true, overlayOptions: { anchor: "center", width: "100%", maxHeight: "100%" } });
+      } finally {
+        refreshStatus = undefined;
+      }
+    },
   });
 
   pi.registerCommand("subagents-status", {
@@ -632,6 +661,7 @@ export default function subagents(pi: ExtensionAPI) {
       if (agent.invalidTools?.length) throw new Error(`${agent.name} has unsupported tools: ${agent.invalidTools.join(", ")}`);
       const writes = agent.tools.some((tool) => tool === "bash" || tool === "edit" || tool === "write");
       const report = startRunReport(REPORTS_DIRECTORY, agent.name, params.task, ctx.cwd);
+      saveHistory(report, ctx);
       let releaseLock: (() => void) | undefined;
       let questionnaireTool: ToolDefinition;
       try {
@@ -643,17 +673,19 @@ export default function subagents(pi: ExtensionAPI) {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         finishRunReport(report, { status: "failed", error: message });
+        saveHistory(report, ctx);
         throw new Error(`${message}\n${formatArtifacts(report)}`);
       }
       const activeRun = trackRun(runs, report, signal, params.async === true);
       if (releaseLock) releases.set(report.id, releaseLock);
       refreshStatus?.();
-      const execute = () => executeRun(activeRun, activeRun.signal, () => runAgent(agent, params.task!, ctx.cwd, activeRun.signal, ctx, pi, {
+      const execute = () => executeRun(activeRun, activeRun.signal, ctx, () => runAgent(agent, params.task!, ctx.cwd, activeRun.signal, ctx, pi, {
         questionnaire: questionnaireTool,
         askParent: askParentFor(activeRun, ctx, questionnaireTool),
         decisionModel: decisionModelEnabled(),
         onSession: (sessionPath, model, thinking) => {
           recordRunSession(report, sessionPath, model, thinking);
+          saveHistory(report, ctx);
           refreshStatus?.();
         },
         onEvent: (event) => {

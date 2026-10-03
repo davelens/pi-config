@@ -95,7 +95,7 @@ try {
   const subagents = loader.getExtensions().extensions.find((extension) => extension.tools.has("subagent"));
   const tool = subagents.tools.get("subagent").definition;
   const result = await tool.execute("bridge-check", { action: "run", agent: "oracle", task: "Check child prompt capture." }, new AbortController().signal, undefined, {
-    cwd: root, modelRegistry: registry, model: session.model, isProjectTrusted: () => false,
+    cwd: root, sessionManager: session.sessionManager, modelRegistry: registry, model: session.model, isProjectTrusted: () => false,
   });
   assert.match(result.content[0].text, /CAPTURE_OK/);
   assert.equal(prompts.length, 2);

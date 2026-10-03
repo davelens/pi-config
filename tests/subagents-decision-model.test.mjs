@@ -165,7 +165,7 @@ try {
   const command = extension.commands.get("subagent-decision-model");
   const notices = [];
   const ctx = {
-    cwd: root, modelRegistry: registry, model: session.model, isProjectTrusted: () => false,
+    cwd: root, sessionManager: session.sessionManager, modelRegistry: registry, model: session.model, isProjectTrusted: () => false,
     scopedModels: [{ model: cheap }, { model: smart, thinkingLevel: "high" }],
     ui: { notify: (message, level) => notices.push(`${level}: ${message}`) },
   };
@@ -417,6 +417,8 @@ try {
   await settle();
   const queued = await run("Queued question", { agent: "scribe", async: true });
   await settle();
+  await assert.rejects(run("Blocked writer", { agent: "scribe" }), /A writer is already running/);
+  assert.equal((await status()).some(({ task }) => task === "Blocked writer"), false, "lock failures never reach the live map");
   const stop = (runId) => tool.execute("stop", { action: "stop", runId }, new AbortController().signal, undefined, ctx);
   const stopping = stop(queued.details.run.id);
   const stoppedPromptly = await Promise.race([stopping.then(() => true), settle(250).then(() => false)]);
@@ -458,7 +460,38 @@ try {
   assert.equal((await status(asking.details.run.id))[0].status, "aborted");
   assert.deepEqual(closed, [{ answers: [], cancelled: true }], "the open overlay was closed");
   assert.equal(streams.splice(0).length, 1);
-  console.log("subagents decision model test passed (no API calls)");
+  // History persists every outcome without changing the live-only status command.
+  const historyEntries = session.sessionManager.getEntries().filter((entry) => entry.type === "custom" && entry.customType === "subagent-run-history");
+  const latestHistory = new Map(historyEntries.map(({ data }) => [data.report.id, data.report]));
+  assert.ok(historyEntries.every(({ data }) => data.parentSessionId === session.sessionManager.getSessionId()));
+  assert.deepEqual(new Set([...latestHistory.values()].map(({ status }) => status)), new Set(["completed", "failed", "aborted"]));
+  const firstHistory = historyEntries[0].data.report;
+  assert.equal(firstHistory.status, "running", "initial snapshots are not mutated on completion");
+  assert.deepEqual(firstHistory.sessionPaths, []);
+  assert.equal(latestHistory.get(firstHistory.id).output, "CHEAP_OK");
+  assert.equal([...latestHistory.values()].find(({ task }) => task === "Blocked writer").status, "failed", "failures before trackRun are persisted");
+  assert.equal([...latestHistory.values()].find(({ task }) => task === "Explain the parser").sessionPaths.length, 2);
+  const historyCommand = extension.commands.get("subagent-history");
+  let renderedHistory;
+  ctx.ui.custom = async (factory) => {
+    renderedHistory = factory({ requestRender() {}, terminal: { rows: 40 } }, {
+      fg: (_color, text) => text, bg: (_color, text) => text, bold: (text) => text,
+    }, {}, () => {});
+  };
+  await extension.commands.get("subagents-status").handler("", ctx);
+  assert.match(notices.at(-1), /No subagents are running/);
+  assert.equal(renderedHistory, undefined);
+  await historyCommand.handler("", ctx);
+  assert.ok(renderedHistory.render(160).join("\n").includes("aborted"), "history opens even when every run has finished");
+  renderedHistory = undefined;
+  await historyCommand.handler("", { ...ctx, sessionManager: SessionManager.inMemory(root) });
+  assert.equal(renderedHistory, undefined, "another session in the same directory has no history");
+  assert.match(notices.at(-1), /No subagent runs recorded/);
+  ctx.mode = "rpc";
+  await historyCommand.handler("", ctx);
+  assert.match(notices.at(-1), /completed\nCHEAP_OK/);
+  assert.doesNotMatch(notices.at(-1), /\\n/);
+  console.log("subagents decision model and history integration test passed (no API calls)");
 } finally {
   globalThis.fetch = realFetch;
   session?.dispose();

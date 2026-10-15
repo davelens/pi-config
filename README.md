@@ -88,6 +88,18 @@ Edit `settings.json` and add to the `packages` array:
 
 Then run `pi install <source>` for each one.
 
+## Bash session metadata
+
+`extensions/pi-tool-display/config.json` disables only pi-tool-display's Bash
+execution override. Version 0.5.0 drops the execution context required for Pi's
+`PI_SESSION_FILE` and other session environment variables. Native Bash preserves
+that context; pi-quiet-tools still provides compact rendering.
+
+Run `/reload` after changing this setting. Verify with
+`node tests/bash-session-environment.test.mjs` (requires the installed Pi and
+pi-tool-display packages). The check covers session metadata and prevents
+inheriting a stale session path in ephemeral sessions.
+
 ## Skills
 
 Skills load from the external directory `~/.config/agents/skills/pi`, wired via the `skills` array in `settings.json`. There is no local `skills/` directory in this repo — Pi auto-discovers everything under that path.

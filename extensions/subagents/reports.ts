@@ -1,9 +1,19 @@
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 export type RunStatus = "running" | "waiting" | "completed" | "failed" | "aborted";
+
+export interface ChildCheckpoint {
+  sessionPath: string;
+  sessionId: string;
+  leafId: string | null;
+  configHash: string;
+  transcriptHash: string;
+  model: string;
+  thinking: string;
+}
 
 export interface RunReport {
   id: string;
@@ -21,6 +31,9 @@ export interface RunReport {
   error?: string;
   sessionPaths: string[];
   filePath: string;
+  continuedFrom?: string;
+  checkpoint?: ChildCheckpoint;
+  lastRequest?: { path: string; at: number; model: string };
 }
 
 function mutationRoot(cwd: string): string {
@@ -37,7 +50,15 @@ function mutationRoot(cwd: string): string {
 }
 
 export function acquireMutationLock(directory: string, cwd: string, runId: string): () => void {
-  const canonicalCwd = mutationRoot(cwd);
+  return acquireLock(directory, mutationRoot(cwd), runId, "writer");
+}
+
+export function acquireSessionLock(directory: string, sessionPath: string, runId: string): () => void {
+  const canonicalPath = existsSync(sessionPath) ? realpathSync(sessionPath) : join(realpathSync(dirname(sessionPath)), basename(sessionPath));
+  return acquireLock(directory, `child:${canonicalPath}`, runId, "child session");
+}
+
+function acquireLock(directory: string, canonicalCwd: string, runId: string, label: string): () => void {
   const locksDirectory = join(directory, ".locks");
   const lockPath = join(locksDirectory, createHash("sha256").update(canonicalCwd).digest("hex"));
   const ownerPath = join(lockPath, "owner.json");
@@ -67,7 +88,7 @@ export function acquireMutationLock(directory: string, cwd: string, runId: strin
         if (code === "ESRCH") throw new Error(`A stale writer lock blocks ${canonicalCwd}; remove ${lockPath}`);
         if (code !== "EPERM") throw ownerError;
       }
-      throw new Error(`A writer is already running in ${canonicalCwd}; lock=${lockPath}`);
+      throw new Error(`A ${label} is already running in ${canonicalCwd}; lock=${lockPath}`);
     }
   }
 
@@ -112,6 +133,8 @@ export function saveRunReport(report: RunReport): void {
     ...(report.model ? [`- Model: ${report.model}`] : []),
     ...(report.thinking ? [`- Thinking: ${report.thinking}`] : []),
     `- Working directory: ${report.cwd}`,
+    ...(report.continuedFrom ? [`- Continued from: ${report.continuedFrom}`] : []),
+    ...(report.lastRequest ? [`- Last model-request context excerpt: ${report.lastRequest.path}`] : []),
     ...report.sessionPaths.map((path) => `- Child session: ${path}`),
     ...(report.warnings ?? []).map((warning) => `- Warning: ${warning}`),
     "",
@@ -126,6 +149,15 @@ export function saveRunReport(report: RunReport): void {
   const temporaryPath = `${report.filePath}.tmp`;
   writeFileSync(temporaryPath, `${lines.join("\n").replace(/\s+$/, "")}\n`);
   renameSync(temporaryPath, report.filePath);
+}
+
+export function recordRequest(report: RunReport, excerpt: string, model: string): void {
+  const path = report.filePath.replace(/\.md$/, ".request.txt");
+  const temporary = `${path}.tmp`;
+  writeFileSync(temporary, excerpt, { mode: 0o600 });
+  renameSync(temporary, path);
+  report.lastRequest = { path, at: Date.now(), model };
+  saveRunReport(report);
 }
 
 export function recordRunWarning(report: RunReport, warning: string): void {
@@ -163,5 +195,9 @@ export function pruneRunReports(directory: string, keep = 200): void {
     .filter((name) => name.endsWith(".md"))
     .sort()
     .filter((name) => !["- Status: running", "- Status: waiting"].includes(readFileSync(join(directory, name), "utf8").split(/\r?\n/, 6)[4] ?? ""));
-  for (const name of completed.slice(0, Math.max(0, completed.length - keep))) unlinkSync(join(directory, name));
+  for (const name of completed.slice(0, Math.max(0, completed.length - keep))) {
+    unlinkSync(join(directory, name));
+    const request = join(directory, name.replace(/\.md$/, ".request.txt"));
+    if (existsSync(request)) unlinkSync(request);
+  }
 }

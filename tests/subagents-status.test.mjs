@@ -45,11 +45,67 @@ status.handleInput("\x0e"); // Ctrl+n selects the next run.
 assert.match(render().join("\n"), /Model: anthropic\/second/);
 status.handleInput("\x10"); // Ctrl+p selects the previous run.
 assert.match(render().join("\n"), /Model: openai\/fallback/);
+first.report.warnings = ["Watchdog suspects repeated tool cycle"];
+first.report.error = "Subagent stopped after persistent repeated tool cycle stall";
+status.handleInput("l");
+status.handleInput("G");
+assert.match(render().join("\n"), /Watchdog suspects repeated tool cycle/);
+assert.match(render().join("\n"), /Subagent stopped after persistent repeated tool cycle stall/);
 for (const width of [20, 80, 160]) {
   lines = status.render(width);
   assert.equal(lines.length, 40);
   assert.ok(lines.every(line => visibleWidth(line) <= width));
 }
+// Quiet color is informational, turns on without new messages, and exposes request/tool inspection.
+const { newActivity, observeActivity, QUIET_MS } = await jiti.import(new URL("../extensions/subagents/activity.ts", import.meta.url).pathname);
+let now = 0;
+const colors = [];
+const quietRun = run("worker", "fake/model");
+quietRun.report.filePath = "/unavailable/report.md";
+quietRun.activity = newActivity(now);
+observeActivity(quietRun.activity, { type: "tool_execution_start", toolCallId: "read", toolName: "read", args: { path: "investigate.ts" } }, now);
+const actions = [];
+let uiRuns = [quietRun];
+const quietStatus = new SubagentStatus({
+  tui: { terminal: { rows: 40 }, requestRender() {} },
+  theme: { fg: (color, text) => { colors.push([color, text]); return text; }, bg: (_color, text) => text, bold: text => text },
+  runs: () => uiRuns, now: () => now, done() {},
+  cancel: async (id) => { actions.push(["cancel", id]); quietRun.report.status = "aborted"; quietRun.report.checkpoint = {}; },
+  continue: async (id) => { actions.push(["continue", id]); const next = run("continued", "fake/model"); next.report.id = "continued-id"; uiRuns.push(next); return { details: { run: next.report } }; },
+});
+assert.doesNotMatch(quietStatus.render(160).join("\n"), /silent/);
+now = QUIET_MS;
+const quietOutput = quietStatus.render(160).join("\n");
+assert.match(quietOutput, /silent 5m/);
+assert.match(quietOutput, /LAST MODEL-REQUEST CONTEXT/);
+assert.match(quietOutput, /investigate.ts/);
+assert.ok(colors.some(([color, text]) => color === "warning" && text.includes("worker · silent")));
+assert.match(quietOutput, /c cancel/);
+observeActivity(quietRun.activity, { type: "tool_execution_update", toolCallId: "read" }, now);
+assert.doesNotMatch(quietStatus.render(160).join("\n"), /silent/);
+const unrelated = run("other", "fake/model");
+unrelated.report.id = "other-id";
+uiRuns.push(unrelated);
+quietStatus.handleInput("c");
+await new Promise(resolve => setImmediate(resolve));
+assert.deepEqual(actions, [["cancel", "12345678"]]);
+assert.match(quietStatus.render(160).join("\n"), /r continue/);
+quietStatus.handleInput("r");
+await new Promise(resolve => setImmediate(resolve));
+assert.deepEqual(actions[1], ["continue", "12345678"]);
+assert.match(quietStatus.render(160).join("\n"), /continued/);
+for (const width of [20, 80, 160]) assert.ok(quietStatus.render(width).every(line => visibleWidth(line) <= width));
+
+const failureStatus = new SubagentStatus({
+  tui: { terminal: { rows: 40 }, requestRender() {} },
+  theme: { fg: (_color, text) => text, bg: (_color, text) => text, bold: text => text },
+  runs: () => [run("worker", "fake/model")], done() {},
+  cancel: async () => { throw new Error("Cancellation failed visibly"); },
+});
+failureStatus.handleInput("c");
+await new Promise(resolve => setImmediate(resolve));
+assert.match(failureStatus.render(160).join("\n"), /Cancellation failed visibly/);
+
 // Saved history survives a new SessionManager and includes abandoned branches.
 const { HISTORY_ENTRY, loadRunHistory } = await jiti.import(new URL("../extensions/subagents/history.ts", import.meta.url).pathname);
 const root = mkdtempSync(new URL("../.subagent-history-test-", import.meta.url).pathname);

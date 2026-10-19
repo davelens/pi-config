@@ -102,7 +102,7 @@ test("loads and validates Markdown timeouts with settings precedence and manager
   for (const name of readdirSync(join(import.meta.dirname, "default-agents"))) {
     if (!name.endsWith(".md")) continue;
     const shipped = parseAgent(readFileSync(join(import.meta.dirname, "default-agents", name), "utf8"))!;
-    assert.equal(shipped.timeoutMs, shipped.name === "worker" ? 1800000 : undefined, name);
+    assert.equal(shipped.timeoutMs, undefined, name);
   }
 });
 
@@ -200,6 +200,20 @@ test("migrates unchanged legacy read-only agents in an existing directory", () =
   assert.equal(readFileSync(join(agents, "scout.md"), "utf8"), currentScout);
   assert.equal(readFileSync(join(agents, "reviewer.md"), "utf8"), currentReviewer);
   assert.equal(readFileSync(join(agents, "researcher.md"), "utf8"), currentResearcher);
+});
+
+test("does not migrate an existing customized worker timeout", () => {
+  const root = mkdtempSync(join(tmpdir(), "lofi-subagent-worker-timeout-"));
+  const defaults = join(root, "defaults");
+  const agents = join(root, "agents");
+  mkdirSync(defaults);
+  mkdirSync(agents);
+  const shipped = definition("worker", "default");
+  const customized = shipped.replace("thinking: low", "timeoutMs: 1800000\nthinking: low");
+  writeFileSync(join(defaults, "worker.md"), shipped);
+  writeFileSync(join(agents, "worker.md"), customized);
+  ensureDefaultAgents(defaults, agents);
+  assert.equal(readFileSync(join(agents, "worker.md"), "utf8"), customized);
 });
 
 test("seeds only a missing directory and restores defaults", () => {
@@ -433,10 +447,12 @@ test("reports child timeouts instead of provider aborts", async () => {
   const session = {
     prompt: () => new Promise<void>((_resolve, reject) => { rejectPrompt = reject; }),
     abort: () => rejectPrompt(new Error("Request was aborted")),
+    steer: async () => "queued" as const,
+    subscribe: () => () => {},
   };
 
   await assert.rejects(
-    promptChild(session, "Task", new AbortController().signal, 5),
+    promptChild(session, "Task", new AbortController().signal, 5, () => {}),
     /Subagent attempt timed out after 5ms/,
   );
 });

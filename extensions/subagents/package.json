@@ -5,7 +5,7 @@
   "keywords": ["pi-package"],
   "type": "module",
   "scripts": {
-    "test": "node --test --experimental-strip-types agents.test.ts"
+    "test": "node --test --experimental-strip-types agents.test.ts stall-watchdog.test.ts activity.test.ts continuation.test.ts"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",

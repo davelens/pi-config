@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import {
   matchesKey,
@@ -8,11 +9,13 @@ import {
   type TUI,
 } from "@earendil-works/pi-tui";
 import type { RunReport } from "./reports.ts";
+import { quietFor, QUIET_MS, type RunActivity } from "./activity.ts";
 import { formatRunUsage, streamJump, type RunMessage } from "./run-stream.ts";
 
 export interface StatusRun {
   report: RunReport;
   messages: RunMessage[];
+  activity?: RunActivity;
 }
 
 interface StatusOptions {
@@ -20,6 +23,9 @@ interface StatusOptions {
   theme: Theme;
   runs: () => StatusRun[];
   done: () => void;
+  now?: () => number;
+  cancel?: (runId: string) => Promise<unknown>;
+  continue?: (runId: string) => Promise<unknown>;
 }
 
 function pad(text: string, width: number): string {
@@ -83,9 +89,27 @@ function streamLines(run: StatusRun, width: number, theme: Theme): string[] {
     }
     if (message.errorMessage) lines.push(theme.fg("error", message.errorMessage));
   }
+  for (const warning of run.report.warnings ?? []) lines.push(...wrapTextWithAnsi(theme.fg("warning", `Warning: ${warning}`), width));
+  if (run.report.error) lines.push(...run.report.error.split("\n").flatMap((line) => wrapTextWithAnsi(theme.fg("error", line), width)));
   if (lines.length) return lines;
-  if (run.report.error) return [theme.fg("error", run.report.error)];
   return [theme.fg("dim", run.report.status === "running" ? "Waiting for the first message…" : "No messages captured")];
+}
+
+function requestLines(run: StatusRun, width: number): string[] {
+  const request = run.report.lastRequest;
+  const lines = [run.report.status === "running" || run.report.status === "waiting" ? "CURRENT TOOLS" : "TOOLS AT LAST OBSERVATION (not live)"];
+  const tools = run.activity ? [...run.activity.tools.values()] : [];
+  if (!tools.length) lines.push("None observed (or historical run).");
+  for (const tool of tools) lines.push(tool.name, tool.args);
+  lines.push("", "LAST MODEL-REQUEST CONTEXT (pre-provider excerpt)", "Last four non-system messages; not a raw HTTP payload.");
+  if (request) {
+    lines.push(`${request.model} · ${new Date(request.at).toISOString()}`);
+    try {
+      if (request.path !== run.report.filePath.replace(/\.md$/, ".request.txt")) throw new Error("Invalid snapshot path");
+      lines.push(readFileSync(request.path, "utf8"));
+    } catch { lines.push("Saved request excerpt unavailable."); }
+  } else lines.push("No model request captured yet.");
+  return lines.flatMap((line) => line.split("\n").flatMap((part) => wrapTextWithAnsi(part, width)));
 }
 
 export class SubagentStatus implements Component {
@@ -97,6 +121,9 @@ export class SubagentStatus implements Component {
   private focus: "sidebar" | "content";
   private followTail = true;
   private pendingG = false;
+  private requestView?: boolean;
+  private actionPending = false;
+  private actionError?: string;
 
   constructor(options: StatusOptions) {
     this.options = options;
@@ -109,6 +136,15 @@ export class SubagentStatus implements Component {
 
   handleInput(data: string): void {
     if (data === "q" || matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) return this.options.done();
+    const selected = this.options.runs()[this.selected];
+    if (data === "v") {
+      this.requestView = !(this.requestView ?? this.isSilent(selected));
+      this.contentOffset = 0;
+      this.followTail = false;
+      return this.options.tui.requestRender();
+    }
+    if (data === "c" && selected && ["running", "waiting"].includes(selected.report.status)) return this.action(this.options.cancel, selected.report.id);
+    if (data === "r" && selected?.report.status === "aborted" && selected.report.checkpoint) return this.action(this.options.continue, selected.report.id, true);
     if (this.options.runs().length > 1 && data === "h") return this.setFocus("sidebar");
     if (data === "l") return this.setFocus("content");
     if (matchesKey(data, "ctrl+n")) return this.moveSelection(1);
@@ -165,13 +201,17 @@ export class SubagentStatus implements Component {
     const activeBorder = (section: "sidebar" | "content", text: string) =>
       this.options.theme.fg(this.focus === section ? "accent" : "border", text);
     const run = runs[this.selected];
-    const content = run ? streamLines(run, contentWidth, this.options.theme) : ["No run selected"];
+    const inspecting = this.requestView ?? this.isSilent(run);
+    const content = run ? (inspecting ? requestLines(run, contentWidth) : streamLines(run, contentWidth, this.options.theme)) : ["No run selected"];
+    if (this.actionError) content.unshift(...wrapTextWithAnsi(this.options.theme.fg("error", this.actionError), contentWidth));
     this.contentMaxOffset = Math.max(0, content.length - bodyHeight);
-    if (this.followTail) this.contentOffset = this.contentMaxOffset;
+    if (this.followTail) this.contentOffset = inspecting ? 0 : this.contentMaxOffset;
     else this.contentOffset = Math.min(this.contentOffset, this.contentMaxOffset);
     this.keepSelectionVisible(bodyHeight);
 
-    const title = run ? `${run.report.agent} · ${run.report.status} · ${run.report.id.slice(0, 8)}` : "No run";
+    const label = (candidate: StatusRun) => candidate.activity?.waitingSince !== undefined ? "waiting for user" : this.isSilent(candidate) ? `silent ${Math.floor(quietFor(candidate.activity, this.options.now?.()) / 60_000)}m` : candidate.report.status;
+    const titleText = run ? `${run.report.agent} · ${label(run)} · ${run.report.id.slice(0, 8)}` : "No run";
+    const title = this.isSilent(run) ? this.options.theme.fg("warning", titleText) : titleText;
     const usage = run ? this.options.theme.fg("dim", formatRunUsage(run.messages)) : "";
     const model = this.options.theme.fg("muted", `Model: ${run?.report.model ?? "starting…"}${run?.report.thinking ? ` · Thinking: ${run.report.thinking}` : ""}`);
     const lines = hasSidebar
@@ -196,7 +236,8 @@ export class SubagentStatus implements Component {
       }
       const index = this.listOffset + row;
       const candidate = runs[index];
-      let sidebar = candidate ? `${index === this.selected ? ">" : " "} ${candidate.report.agent} ${candidate.report.status}` : "";
+      let sidebar = candidate ? `${index === this.selected ? ">" : " "} ${candidate.report.agent} ${label(candidate)}` : "";
+      if (this.isSilent(candidate)) sidebar = this.options.theme.fg("warning", sidebar);
       if (candidate && index === this.selected) sidebar = this.options.theme.bg("selectedBg", this.options.theme.bold(pad(sidebar, sidebarWidth)));
       lines.push(border("│") + (candidate && index === this.selected ? sidebar : pad(sidebar, sidebarWidth)) + border("│") + pad(contentLine, contentWidth) + border("│"));
     }
@@ -205,9 +246,34 @@ export class SubagentStatus implements Component {
     const below = Math.max(0, this.contentMaxOffset - this.contentOffset);
     const status = `${above} above · ${below} below${this.followTail ? " · following" : ""}`;
     lines.push(border("├") + border("─".repeat(innerWidth)) + border("┤"));
-    lines.push(border("│") + pad(this.options.theme.fg("dim", `${status} · ${hasSidebar ? "h/l focus · ctrl+n/p select · " : ""}j/k · {/} ±10 · gg/G ends · q/esc close`), innerWidth) + border("│"));
+    lines.push(border("│") + pad(this.options.theme.fg("dim", `${this.actionPending ? "Working… · " : ""}${run && ["running", "waiting"].includes(run.report.status) && this.options.cancel ? "c cancel · " : ""}${run?.report.status === "aborted" && run.report.checkpoint && this.options.continue ? "r continue · " : ""}v request/stream · ${status} · ${hasSidebar ? "h/l · ctrl+n/p · " : ""}j/k · gg/G · q close`), innerWidth) + border("│"));
     lines.push(border("╰") + border("─".repeat(innerWidth)) + border("╯"));
     return lines;
+  }
+
+  private isSilent(run: StatusRun | undefined): boolean {
+    return run?.report.status === "running" && quietFor(run.activity, this.options.now?.()) >= QUIET_MS;
+  }
+
+  private action(callback: ((id: string) => Promise<unknown>) | undefined, id: string, continuing = false): void {
+    if (!callback || this.actionPending) return;
+    this.actionPending = true;
+    this.actionError = undefined;
+    void Promise.resolve().then(() => callback(id)).then((result) => {
+      const nextId = continuing ? (result as { details?: { run?: { id?: string } } } | undefined)?.details?.run?.id : id;
+      const index = this.options.runs().findIndex(({ report }) => report.id === nextId);
+      this.selected = index >= 0 ? index : Math.max(0, this.options.runs().length - 1);
+      this.requestView = undefined;
+      this.followTail = true;
+    }, (error) => {
+      this.actionError = error instanceof Error ? error.message : String(error);
+      this.contentOffset = 0;
+      this.followTail = false;
+    }).finally(() => {
+      this.actionPending = false;
+      this.options.tui.requestRender();
+    });
+    this.options.tui.requestRender();
   }
 
   private setFocus(focus: "sidebar" | "content"): void {
@@ -222,6 +288,8 @@ export class SubagentStatus implements Component {
     const selected = Math.max(0, Math.min(runs.length - 1, this.selected + delta));
     if (selected === this.selected) return;
     this.selected = selected;
+    this.requestView = undefined;
+    this.actionError = undefined;
     this.contentOffset = 0;
     this.followTail = true;
     this.pendingG = false;

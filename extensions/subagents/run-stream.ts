@@ -1,4 +1,5 @@
 import type { RunReport } from "./reports.ts";
+import { newActivity, type RunActivity } from "./activity.ts";
 
 export interface RunMessage {
   role?: string;
@@ -58,6 +59,7 @@ export interface MessageEvent {
 
 export interface ActiveRun {
   report: RunReport;
+  activity: RunActivity;
   controller: AbortController;
   signal: AbortSignal;
   promise: Promise<void>;
@@ -69,6 +71,7 @@ export function trackRun(runs: Map<string, ActiveRun>, report: RunReport, parent
   const controller = new AbortController();
   const run = {
     report,
+    activity: newActivity(),
     controller,
     signal: detached || !parentSignal ? controller.signal : AbortSignal.any([parentSignal, controller.signal]),
     promise: Promise.resolve(),

@@ -125,6 +125,8 @@ try {
   const runtime = await ModelRuntime.create({ refreshOnCreate: false });
   const streams = [];
   let script = [];
+  let beforeStream;
+  const watchdogContexts = [];
   const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
   const modelDefinition = (id, extra = {}) => ({ id, name: id, reasoning: false, input: ["text"], cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 }, contextWindow: 128000, maxTokens: 8192, ...extra });
   runtime.registerProvider("fake", {
@@ -138,6 +140,17 @@ try {
       streams.push({ model: `${model.provider}/${model.id}`, reasoning: options?.reasoning, ...(last?.role === "toolResult" ? { toolResult: last.content.map((part) => part.text ?? "").join("") } : {}) });
       const stream = createAssistantMessageEventStream();
       const base = { role: "assistant", api: model.api, provider: model.provider, model: model.id, usage, timestamp: Date.now() };
+      if (beforeStream) { watchdogContexts.push(context.messages); beforeStream(step); }
+      if (step.hold) {
+        const finish = () => {
+          const message = { ...base, content: [], stopReason: "aborted", errorMessage: "Operation aborted" };
+          stream.push({ type: "error", reason: "aborted", error: message });
+          stream.end(message);
+        };
+        step.finish = finish;
+        options.signal.addEventListener("abort", () => { step.aborted = true; if (!step.delayAbort) finish(); }, { once: true });
+        return stream;
+      }
       if (step.error) {
         const message = { ...base, content: [], stopReason: "error", errorMessage: step.error };
         stream.push({ type: "error", reason: "error", error: message });
@@ -157,7 +170,7 @@ try {
   const cheap = registry.find("fake", "cheap");
   const smart = registry.find("fake", "smart");
   assert.ok(cheap && smart);
-  ({ session } = await createAgentSession({ cwd: root, agentDir, resourceLoader: loader, settingsManager, modelRuntime: runtime, model: cheap, sessionManager: SessionManager.inMemory(root), tools: ["read"] }));
+  ({ session } = await createAgentSession({ cwd: root, agentDir, resourceLoader: loader, settingsManager, modelRuntime: runtime, model: cheap, sessionManager: SessionManager.create(root, root), tools: ["read"] }));
   const managed = join(root, ".config/agents/pi");
   writeFileSync(join(managed, "oracle.md"), "---\nname: oracle\ndescription: Test oracle\nmodel: fake/cheap\nfallbackModels: fake/spare\nthinking: low\ntools: read\n---\nAnswer briefly.\n");
   const extension = loader.getExtensions().extensions.find((candidate) => candidate.tools.has("subagent"));
@@ -312,7 +325,7 @@ try {
   let answer = (questions) => ({ answers: questions.map((q, questionIndex) => ({ questionIndex, question: q.question, kind: "option", answer: "New" })), cancelled: false });
   ctx.hasUI = true;
   ctx.ui.custom = async (_factory, options) => {
-    assert.equal(options?.overlay, true, "the installed questionnaire overlay is used");
+    assert.equal(typeof options?.overlay, "boolean", "the installed questionnaire chooses inline or overlay presentation");
     assert.equal(open++, 0, "questionnaires never overlap");
     await settle(5);
     open--;
@@ -406,8 +419,8 @@ try {
   const first = await run("First question", { async: true });
   const second = await run("Second question", { async: true });
   const results = await Promise.all([first, second].map(({ details }) => wait(details.run.id)));
-  assert.match(results[0].content[0].text, /FIRST_DONE/);
-  assert.match(results[1].content[0].text, /SECOND_DONE/);
+  // Concurrent session setup does not promise provider request order.
+  assert.deepEqual(results.map(({ content }) => content[0].text.split("\n")[0]).sort(), ["FIRST_DONE", "SECOND_DONE"]);
   seen = streams.splice(0);
   assert.deepEqual(seen.filter(({ toolResult }) => toolResult).map(({ toolResult }) => /Answer to (\w+)/.exec(toolResult)[1]).sort(), ["First", "Second"]);
 
@@ -447,6 +460,195 @@ try {
   delete ctx.ui.select;
   delete ctx.ui.input;
 
+  // Watchdog integration uses the real SDK/session runner, but a synthetic clock and provider.
+  {
+    const realNow = Date.now, realSet = globalThis.setTimeout, realClear = globalThis.clearTimeout;
+    let now = realNow();
+    const timers = new Map();
+    Date.now = () => now;
+    globalThis.setTimeout = (callback, delay, ...args) => {
+      if (delay < 30_000) return realSet(callback, delay, ...args);
+      const handle = { unref() { return this; }, ref() { return this; } };
+      timers.set(handle, { at: now + delay, callback: () => callback(...args) });
+      return handle;
+    };
+    globalThis.clearTimeout = (handle) => { if (!timers.delete(handle)) realClear(handle); };
+    const tick = (duration) => {
+      const end = now + duration;
+      for (;;) {
+        const next = [...timers].sort((a, b) => a[1].at - b[1].at)[0];
+        if (!next || next[1].at > end) break;
+        now = next[1].at;
+        timers.delete(next[0]);
+        next[1].callback();
+      }
+      now = end;
+    };
+    const until = async (condition) => {
+      for (let i = 0; i < 100 && !condition(); i++) await settle(5);
+      assert.ok(condition(), "expected runner boundary was reached");
+    };
+    const readFixture = (path = "watchdog-fixture.txt") => ({ toolCall: { name: "read", arguments: { path } } });
+    writeFileSync(join(root, "watchdog-fixture.txt"), "Synthetic content\n");
+    writeDecisionModel(join(agentDir, "settings.json"), false);
+    try {
+      const noDeadline = await tool.execute("list", { action: "list" }, new AbortController().signal, undefined, ctx);
+      assert.match(noDeadline.content[0].text, /oracle[^\n]*deadline=none/);
+      beforeStream = () => tick(20 * 60_000);
+      script = [readFixture(), readFixture(), readFixture(), { text: "LONG_PRODUCTIVE_OK" }];
+      result = await run("Long productive reader");
+      assert.match(result.content[0].text, /LONG_PRODUCTIVE_OK/);
+      assert.doesNotMatch(result.content[0].text, /Warning/);
+      assert.equal(timers.size, 0);
+      streams.splice(0);
+
+      // A warning reaches the next actual child request, without another routing/model call.
+      const priorParentMessages = session.messages.length;
+      beforeStream = () => tick(60_000);
+      script = [...Array.from({ length: 13 }, () => readFixture()), { text: "PARTIAL_WITH_BLOCKER" }];
+      result = await run("Recovering exact loop");
+      assert.match(result.content[0].text, /PARTIAL_WITH_BLOCKER/);
+      assert.match(result.content[0].text, /Warning: Subagent watchdog suspects repeated tool cycle/);
+      assert.ok(watchdogContexts.some((messages) => messages.some((message) => message.role === "user" && /Provide concrete findings/.test(JSON.stringify(message.content)))), "steering is delivered to the child context");
+      assert.ok(session.messages.slice(priorParentMessages).some((message) => message.role === "custom" && /Run ID:.*\nSubagent watchdog/s.test(message.content)), "parent warning is visible without starting a parent turn");
+      assert.equal(streams.splice(0).length, 14, "warnings do not invoke extra model calls");
+      const warningHistory = session.sessionManager.getEntries().filter((entry) => entry.customType === "subagent-run-history" && entry.data.report.task === "Recovering exact loop");
+      assert.ok(warningHistory.some(({ data }) => data.report.status === "running" && data.report.warnings?.length), "warning is persisted before completion");
+      assert.equal(timers.size, 0);
+
+      // Persistent loops fail rather than falling back, for both readers and writers.
+      for (const agent of ["oracle", "scribe"]) {
+        script = Array.from({ length: 50 }, () => readFixture());
+        await assert.rejects(run(`Stalled loop ${agent}`, { agent }), /persistent repeated tool cycle stall/);
+        assert.ok(streams.splice(0).every(({ model }) => model === "fake/cheap"));
+        assert.equal((await status()).at(-1).status, "failed");
+        assert.equal(timers.size, 0);
+      }
+
+      // Silence cannot distinguish useful work from a hang: only a manual stop ends it.
+      beforeStream = () => {};
+      const silent = { hold: true };
+      script = [silent];
+      const silentRun = await run("Silent reader", { async: true });
+      await until(() => silent.finish);
+      tick(24 * 60 * 60_000);
+      const silentStatus = (await status(silentRun.details.run.id))[0];
+      assert.equal(silentStatus.status, "running");
+      assert.ok(silentStatus.quietMs >= 5 * 60_000);
+      const quietText = await tool.execute("status", { action: "status", runId: silentRun.details.run.id }, new AbortController().signal, undefined, ctx);
+      assert.match(quietText.content[0].text, /silent/);
+      assert.match(readFileSync(silentStatus.lastRequest.path, "utf8"), /Silent reader/);
+      assert.deepEqual(silentStatus.warnings ?? [], []);
+      assert.equal(silent.aborted, undefined);
+      await stop(silentRun.details.run.id);
+      assert.equal(streams.splice(0).length, 1);
+      assert.equal(timers.size, 0);
+
+      // Explicit Continue reuses the saved child and bypasses routing/fallbacks.
+      const stoppedReader = (await status(silentRun.details.run.id))[0];
+      const originalChildPath = stoppedReader.checkpoint.sessionPath;
+      const originalChildId = stoppedReader.checkpoint.sessionId;
+      const beforeContinueCalls = classifyCalls;
+      const originalFind = registry.find.bind(registry);
+      registry.find = (provider, id) => `${provider}/${id}` === stoppedReader.checkpoint.model ? undefined : originalFind(provider, id);
+      try {
+        await assert.rejects(tool.execute("unavailable", { action: "continue", runId: stoppedReader.id }, undefined, undefined, ctx), /Saved model.*unavailable/);
+      } finally { registry.find = originalFind; }
+      writeDecisionModel(join(agentDir, "settings.json"), true);
+      script = [{ text: "CONTINUED_CHILD" }];
+      const continued = await tool.execute("continue", { action: "continue", runId: stoppedReader.id }, new AbortController().signal, undefined, ctx);
+      assert.match(continued.content[0].text, /CONTINUED_CHILD/);
+      assert.equal(classifyCalls, beforeContinueCalls, "continue never reroutes");
+      const continuedReport = (await status()).at(-1);
+      assert.equal(continuedReport.continuedFrom, stoppedReader.id);
+      assert.equal(continuedReport.checkpoint.sessionPath, originalChildPath);
+      assert.equal(continuedReport.checkpoint.sessionId, originalChildId);
+      assert.match(JSON.stringify(watchdogContexts.at(-1)), /Silent reader/);
+      assert.match(JSON.stringify(watchdogContexts.at(-1)), /Do not blindly replay side-effecting tools/);
+      assert.equal((await status(stoppedReader.id))[0].status, "aborted", "original outcome remains auditable");
+      await assert.rejects(tool.execute("continue", { action: "continue", runId: stoppedReader.id }, undefined, undefined, ctx), /changed since/);
+      writeDecisionModel(join(agentDir, "settings.json"), false);
+      streams.splice(0);
+
+      // A cancelled writer's completed file edit survives opening the child after reload.
+      writeFileSync(join(root, "resume-file.txt"), "before\n");
+      const interrupted = { hold: true };
+      script = [{ toolCall: { name: "edit", arguments: { path: "resume-file.txt", oldText: "before", newText: "after" } } }, interrupted];
+      const edited = await run("Apply the change once", { agent: "scribe", async: true });
+      await until(() => interrupted.finish);
+      assert.equal(readFileSync(join(root, "resume-file.txt"), "utf8"), "after\n");
+      await stop(edited.details.run.id);
+      const checkpoint = (await status(edited.details.run.id))[0].checkpoint;
+      streams.splice(0);
+      const reopenedLoader = new DefaultResourceLoader({ cwd: root, agentDir, settingsManager, additionalExtensionPaths: [join(repo, "extensions/subagents/index.ts")], noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true });
+      await reopenedLoader.reload();
+      assert.deepEqual(reopenedLoader.getExtensions().errors, []);
+      const { session: reopenedParent } = await createAgentSession({ cwd: root, agentDir, resourceLoader: reopenedLoader, settingsManager, modelRuntime: runtime, model: cheap, sessionManager: SessionManager.open(session.sessionManager.getSessionFile()), tools: ["read"] });
+      try {
+        const reopenedTool = reopenedLoader.getExtensions().extensions.find((candidate) => candidate.tools.has("subagent")).tools.get("subagent").definition;
+        const reopenedCtx = { ...ctx, sessionManager: reopenedParent.sessionManager };
+        const resumeHold = { hold: true };
+        script = [resumeHold];
+        const resuming = await reopenedTool.execute("resume-after-reload", { action: "continue", runId: edited.details.run.id, async: true }, undefined, undefined, reopenedCtx);
+        await until(() => resumeHold.finish);
+        assert.deepEqual(resuming.details.run.sessionPaths, [checkpoint.sessionPath]);
+        assert.match(JSON.stringify(watchdogContexts.at(-1)), /Apply the change once/);
+        assert.equal(readFileSync(join(root, "resume-file.txt"), "utf8"), "after\n", "interrupted assignment does not replay completed edits");
+        await assert.rejects(reopenedTool.execute("duplicate", { action: "continue", runId: edited.details.run.id, async: true }, undefined, undefined, reopenedCtx), /changed since|already running/);
+        await assert.rejects(reopenedTool.execute("active", { action: "continue", runId: resuming.details.run.id }, undefined, undefined, reopenedCtx), /Only a cancelled/);
+        await reopenedTool.execute("stop", { action: "stop", runId: resuming.details.run.id }, undefined, undefined, reopenedCtx);
+        const resumedStatus = (await reopenedTool.execute("status", { action: "status", runId: resuming.details.run.id }, undefined, undefined, reopenedCtx)).details.runs[0];
+        assert.equal(resumedStatus.checkpoint.sessionId, checkpoint.sessionId);
+        script = [{ text: "RESUMED_AFTER_RELOAD" }];
+        const completed = await reopenedTool.execute("resume-again", { action: "continue", runId: resuming.details.run.id }, undefined, undefined, reopenedCtx);
+        assert.match(completed.content[0].text, /RESUMED_AFTER_RELOAD/);
+        assert.equal(readFileSync(join(root, "resume-file.txt"), "utf8"), "after\n");
+        assert.equal(streams.splice(0).length, 2, "continuation made model requests only, no tool replays/fallbacks");
+        await assert.rejects(reopenedTool.execute("unknown", { action: "continue", runId: "not-this-parent" }, undefined, undefined, reopenedCtx), /this parent session/);
+      } finally { reopenedParent.dispose(); }
+
+      // Neither a manual stop request nor prompt completion releases a writer still settling.
+      const held = { hold: true, delayAbort: true };
+      script = [held];
+      const writer = await run("Delayed writer abort", { agent: "scribe", async: true });
+      await until(() => held.finish);
+      const stoppingWriter = stop(writer.details.run.id);
+      await until(() => held.aborted);
+      await assert.rejects(run("Writer while aborting", { agent: "scribe" }), /A writer is already running/);
+      held.finish();
+      await stoppingWriter;
+      script = [{ text: "WRITER_RELEASED" }];
+      result = await run("Writer after settlement", { agent: "scribe" });
+      assert.match(result.content[0].text, /WRITER_RELEASED/);
+      streams.splice(0);
+      assert.equal(timers.size, 0);
+
+      // The real contact_parent execution suspends the watchdog, including its grace.
+      ctx.ui.custom = async () => { tick(120 * 60_000); return { answers: [{ questionIndex: 0, question: "Waiting?", kind: "option", answer: "New" }], cancelled: false }; };
+      script = [ask(question("Waiting?")), { text: "WAITING_IS_NOT_STALLED" }];
+      result = await run("Long user wait");
+      assert.match(result.content[0].text, /WAITING_IS_NOT_STALLED/);
+      assert.doesNotMatch(result.content[0].text, /Warning/);
+      streams.splice(0);
+      assert.equal(timers.size, 0);
+
+      // An explicit deadline remains one budget, even through a failed model attempt.
+      writeFileSync(join(managed, "oracle.md"), originalDefinition.replace("thinking: low", "timeoutMs: 120000\nthinking: low"));
+      beforeStream = () => tick(70_000);
+      script = [{ error: "first attempt failed" }, { hold: true }];
+      await assert.rejects(run("Explicit shared budget"), /timed out/);
+      assert.ok(streams.splice(0).length <= 2);
+      assert.equal(timers.size, 0);
+    } finally {
+      beforeStream = undefined;
+      Date.now = realNow;
+      globalThis.setTimeout = realSet;
+      globalThis.clearTimeout = realClear;
+      writeFileSync(join(managed, "oracle.md"), originalDefinition);
+      writeDecisionModel(join(agentDir, "settings.json"), true);
+    }
+  }
+
   // Shutdown dismisses the real questionnaire component and settles the run.
   const closed = [];
   const theme = new Proxy({}, { get: () => (_color, text = "") => String(text) });
@@ -482,7 +684,18 @@ try {
   await extension.commands.get("subagents-status").handler("", ctx);
   assert.match(notices.at(-1), /No subagents are running/);
   assert.equal(renderedHistory, undefined);
-  await historyCommand.handler("", ctx);
+  const originalInterval = globalThis.setInterval, originalClearInterval = globalThis.clearInterval;
+  const uiTimers = new Set();
+  globalThis.setInterval = (callback, delay) => { const timer = originalInterval(callback, delay); uiTimers.add(timer); return timer; };
+  globalThis.clearInterval = (timer) => { uiTimers.delete(timer); originalClearInterval(timer); };
+  try {
+    await historyCommand.handler("", ctx);
+    assert.equal(uiTimers.size, 0, "quiet-state refresh timer is cleared when the popup closes");
+  } finally {
+    for (const timer of uiTimers) originalClearInterval(timer);
+    globalThis.setInterval = originalInterval;
+    globalThis.clearInterval = originalClearInterval;
+  }
   assert.ok(renderedHistory.render(160).join("\n").includes("aborted"), "history opens even when every run has finished");
   renderedHistory = undefined;
   await historyCommand.handler("", { ...ctx, sessionManager: SessionManager.inMemory(root) });

@@ -1,7 +1,7 @@
 ---
 name: reviewer
 description: Evidence-based review of code, diffs, or plans
-model: claude-bridge/claude-fable-5
+model: claude-bridge/claude-opus-5-5
 fallbackModels: openai-codex/gpt-6-astra
 thinking: high
 skills: project-conventions, ponytail-review

@@ -1,7 +1,7 @@
 ---
 name: diff-summarizer
 description: Terse summary of the current Git diff and review hotspots
-model: openai-codex/gpt-5.6-luna
+model: openai-codex/gpt-6-luna
 thinking: medium
 tools: read, grep, find, ls, git_inspect
 ---

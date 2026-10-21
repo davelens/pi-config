@@ -1,7 +1,7 @@
 ---
 name: researcher
 description: Focused web and documentation research
-model: openai-codex/gpt-5.6-terra
+model: openai-codex/gpt-6-terra
 thinking: medium
 skills: ketch, docs-reference
 tools: read, ketch

@@ -1,7 +1,7 @@
 ---
 name: delegate
 description: Small mechanical task; use worker for implementation
-model: openai-codex/gpt-5.6-luna
+model: openai-codex/gpt-6-luna
 thinking: medium
 skills: project-conventions, ponytail
 tools: read, grep, find, ls, bash, edit, write

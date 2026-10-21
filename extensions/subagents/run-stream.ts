@@ -1,5 +1,6 @@
 import type { RunReport } from "./reports.ts";
 import { newActivity, type RunActivity } from "./activity.ts";
+import type { SubagentRunIdentity } from "./lifecycle.ts";
 
 export interface RunMessage {
   role?: string;
@@ -65,9 +66,10 @@ export interface ActiveRun {
   promise: Promise<void>;
   messages: RunMessage[];
   detached: boolean;
+  identity: SubagentRunIdentity;
 }
 
-export function trackRun(runs: Map<string, ActiveRun>, report: RunReport, parentSignal: AbortSignal | undefined, detached: boolean): ActiveRun {
+export function trackRun(runs: Map<string, ActiveRun>, report: RunReport, parentSignal: AbortSignal | undefined, detached: boolean, identity: SubagentRunIdentity): ActiveRun {
   const controller = new AbortController();
   const run = {
     report,
@@ -77,6 +79,7 @@ export function trackRun(runs: Map<string, ActiveRun>, report: RunReport, parent
     promise: Promise.resolve(),
     messages: [],
     detached,
+    identity,
   };
   runs.set(report.id, run);
   return run;

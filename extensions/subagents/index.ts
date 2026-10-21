@@ -27,6 +27,7 @@ import { buildDoctorReport } from "./doctor-report.ts";
 import { SubagentsDoctor } from "./doctor.ts";
 import { SubagentManager } from "./manager.ts";
 import { HISTORY_ENTRY, loadRunHistory } from "./history.ts";
+import { emitLifecycle, SUBAGENT_LIVE_RUNS_EVENT, type SubagentLifecycleEvent, type SubagentLiveRunsRequest, type SubagentRunIdentity } from "./lifecycle.ts";
 import { promptChild } from "./prompt-child.ts";
 import { SubagentStallError } from "./stall-watchdog.ts";
 import { observeActivity, quietFor, QUIET_MS, requestExcerpt } from "./activity.ts";
@@ -404,6 +405,18 @@ export default function subagents(pi: ExtensionAPI) {
     parentSessionId: ctx.sessionManager.getSessionId(), report: structuredClone(report),
   });
   const releases = new Map<string, () => void>();
+  // Terminal lifecycle events by run, so the async wake-up can honor a listener's claim.
+  const terminal = new Map<string, Extract<SubagentLifecycleEvent, { phase: "finished" }>>();
+  const identity = (report: RunReport, ctx: ExtensionContext, detached: boolean): SubagentRunIdentity => ({
+    parentSessionId: ctx.sessionManager.getSessionId(), runId: report.id, agent: report.agent, task: report.task, reportPath: report.filePath, detached,
+  });
+  pi.events.on(SUBAGENT_LIVE_RUNS_EVENT, (data) => {
+    const request = data as SubagentLiveRunsRequest;
+    for (const run of runs.values()) {
+      if (run.report.status !== "running" && run.report.status !== "waiting") continue;
+      request.runs.push({ ...run.identity, status: run.report.status });
+    }
+  });
   let questionnaire: Promise<ToolDefinition> | undefined;
   // ponytail: one questionnaire at a time across every child; queue order is arrival order.
   let questionnaireTurn: Promise<unknown> = Promise.resolve();
@@ -435,6 +448,8 @@ export default function subagents(pi: ExtensionAPI) {
       cleanupRun(run.report.id);
       refreshStatus?.();
       pruneFinishedRuns(runs);
+      // Locks are released by now; the status is terminal.
+      terminal.set(run.report.id, emitLifecycle(pi, { ...run.identity, phase: "finished", status: run.report.status as "completed" | "failed" | "aborted", reason: run.report.error, claimed: false }));
     }
   };
 
@@ -446,11 +461,13 @@ export default function subagents(pi: ExtensionAPI) {
       signal.throwIfAborted();
       pauseRunReport(run.report, questions);
       refreshStatus?.();
+      emitLifecycle(pi, { ...run.identity, phase: "waiting" });
       try {
         return await askParent(tool, ctx, request, signal);
       } finally {
         resumeRunReport(run.report);
         refreshStatus?.();
+        emitLifecycle(pi, { ...run.identity, phase: "running" });
       }
     });
     questionnaireTurn = turn.catch(() => undefined);
@@ -466,6 +483,7 @@ export default function subagents(pi: ExtensionAPI) {
     const error = answer.status === "cancelled"
       ? new ParentQuestionError("aborted", `User cancelled the questionnaire, so ${run.report.agent} stopped before deciding:\n${listed}`)
       : new ParentQuestionError("failed", `Parent questionnaire failed for ${run.report.agent}: ${answer.message}\nUnanswered:\n${listed}`);
+    if (answer.status === "cancelled") emitLifecycle(pi, { ...run.identity, phase: "cancelled", source: "questionnaire" });
     run.controller.abort(error);
     throw error;
   };
@@ -495,7 +513,11 @@ export default function subagents(pi: ExtensionAPI) {
         statusTimer = setInterval(() => refreshStatus?.(), 1000);
         return new SubagentStatus({
           tui, theme, runs: viewRuns, done,
-          cancel: (runId) => subagentTool.execute("ui-cancel", { action: "stop", runId }, new AbortController().signal, undefined, ctx),
+          cancel: (runId) => {
+            const run = runs.get(runId);
+            if (run && (run.report.status === "running" || run.report.status === "waiting")) emitLifecycle(pi, { ...run.identity, phase: "cancelled", source: "viewer" });
+            return subagentTool.execute("ui-cancel", { action: "stop", runId }, new AbortController().signal, undefined, ctx);
+          },
           continue: (runId) => subagentTool.execute("ui-continue", { action: "continue", runId, async: true }, new AbortController().signal, undefined, ctx),
         });
       }, { overlay: true, overlayOptions: { anchor: "center", width: "100%", maxHeight: "100%" } });
@@ -714,6 +736,8 @@ export default function subagents(pi: ExtensionAPI) {
       const report = startRunReport(REPORTS_DIRECTORY, agent.name, task, ctx.cwd);
       if (previous) { report.continuedFrom = previous.id; saveRunReport(report); }
       saveHistory(report, ctx);
+      const runIdentity = identity(report, ctx, params.async === true);
+      emitLifecycle(pi, { ...runIdentity, phase: "started" });
       let releaseLock: (() => void) | undefined;
       let questionnaireTool: ToolDefinition;
       try {
@@ -726,9 +750,10 @@ export default function subagents(pi: ExtensionAPI) {
         const message = error instanceof Error ? error.message : String(error);
         finishRunReport(report, { status: "failed", error: message });
         saveHistory(report, ctx);
+        emitLifecycle(pi, { ...runIdentity, phase: "finished", status: "failed", reason: message, claimed: false });
         throw new Error(`${message}\n${formatArtifacts(report)}`);
       }
-      const activeRun = trackRun(runs, report, signal, params.async === true);
+      const activeRun = trackRun(runs, report, signal, params.async === true, runIdentity);
       if (releaseLock) releases.set(report.id, releaseLock);
       refreshStatus?.();
       const execute = () => executeRun(activeRun, activeRun.signal, ctx, () => runAgent(agent, resume ? continuationPrompt(task) : task, ctx.cwd, activeRun.signal, ctx, pi, {
@@ -767,14 +792,18 @@ export default function subagents(pi: ExtensionAPI) {
       if (params.async) {
         activeRun.promise = execute()
           .then(() => {
+            terminal.delete(report.id);
             if (!shuttingDown) ctx.ui.notify(`${agent.name} completed: ${report.filePath}`, "info");
           })
           .catch((error) => {
+            const claimed = terminal.get(report.id)?.claimed === true;
+            terminal.delete(report.id);
             if (shuttingDown) return;
             const message = `${agent.name} ${report.status}: ${error instanceof Error ? error.message : String(error)}`;
             ctx.ui.notify(message, "error");
             // A user cancellation or failure needs a fresh parent decision; a deliberate stop does not.
-            if (error instanceof ParentQuestionError || report.status === "failed") {
+            // A lifecycle listener that claimed the terminal event owns that decision instead.
+            if (!claimed && (error instanceof ParentQuestionError || report.status === "failed")) {
               pi.sendMessage({ customType: "subagent-run-ended", content: `${message}\nRun ID: ${report.id}\nThis run was stopped and will not be restarted automatically. Choose a safe task-dependent alternative or report the blocker; do not answer for the user.`, display: true }, { deliverAs: "steer", triggerTurn: true });
             }
           });
@@ -791,7 +820,7 @@ export default function subagents(pi: ExtensionAPI) {
       const execution = execute();
       activeRun.promise = execution.then(() => undefined, () => undefined);
       try {
-        const result = await execution;
+        const result = await execution.finally(() => terminal.delete(report.id));
         const truncated = truncateHead(result.output);
         return {
           content: [{

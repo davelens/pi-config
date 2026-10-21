@@ -462,7 +462,7 @@ test("tracks foreground runs and forwards cancellation", () => {
   const report = startRunReport(directory, "reviewer", "Review this", "/project");
   const runs = new Map();
   const parent = new AbortController();
-  const run = trackRun(runs, report, parent.signal, false);
+  const run = trackRun(runs, report, parent.signal, false, { parentSessionId: "parent", runId: report.id, agent: report.agent, task: report.task, reportPath: report.filePath, detached: false });
 
   assert.equal(runs.get(report.id), run);
   parent.abort();
@@ -472,7 +472,7 @@ test("tracks foreground runs and forwards cancellation", () => {
 test("cancelling a promise-driven wait leaves its detached run alive", async () => {
   const directory = mkdtempSync(join(tmpdir(), "lofi-subagent-wait-"));
   const report = startRunReport(directory, "reviewer", "Review this", "/project");
-  const run = trackRun(new Map(), report, undefined, true);
+  const run = trackRun(new Map(), report, undefined, true, { parentSessionId: "parent", runId: report.id, agent: report.agent, task: report.task, reportPath: report.filePath, detached: true });
   let complete!: () => void;
   run.promise = new Promise<void>((resolve) => { complete = resolve; });
   const waiter = new AbortController();

@@ -8,8 +8,8 @@
     "+codemode"
   ],
   "editorPaddingX": 1,
-  "hideThinkingBlock": true,
-  "lastChangelogVersion": "1.3.0",
+  "hideThinkingBlock": false,
+  "lastChangelogVersion": "1.4.0",
   "packages": [
     "git:github.com/DietrichGebert/ponytail",
     "git:github.com/elidickinson/pi-claude-bridge",

@@ -107,7 +107,7 @@ export function validateEvidence(evidence: unknown): string {
   return text;
 }
 
-const RULES = `Judge every acceptance criterion against actual checks before deciding. Call goal_control with action "done" and the evidence only when every criterion is met. Call goal_control with action "blocked" when a permission denial, missing access, unsafe lock, or other obstacle prevents finishing; do not work around a denial. Record satisfied criteria with action "progress". Otherwise continue only the useful unfinished work; do not repeat settled checks or polish finished work. Never continue, rerun, or retry a cancelled or failed subagent unless the user explicitly asks.`;
+const RULES = `Judge every acceptance criterion against actual checks before deciding. Call goal_control with action "done" and the evidence only when every criterion is met. Call goal_control with action "blocked" when a permission denial, missing access, unsafe lock, or other obstacle prevents finishing; do not work around a denial. Record satisfied criteria with action "progress". Call it with action "resume" only when the user explicitly asks to resume a blocked goal. Otherwise continue only the useful unfinished work; do not repeat settled checks or polish finished work. Never continue, rerun, or retry a cancelled or failed subagent unless the user explicitly asks.`;
 
 export function activationPrompt(goal: GoalSnapshot): string {
   return `Pinned goal (stays active until goal_control reports done or blocked, or the user runs /goal clear):\n${goal.text}\n\n${RULES}`;

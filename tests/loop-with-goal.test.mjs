@@ -252,6 +252,15 @@ try {
   assert.match(contextOf(beforeResume), /The user resumed the goal/);
   assert.equal(lastGoal(session).status, "blocked");
   assert.match(lastGoal(session).blockedReason, /3 consecutive stops without tool activity/);
+  script = [{ toolCall: { name: "goal_control", arguments: { action: "resume", evidence: "User asked to resume after fixing permissions" } } }, { text: "Resumed." }, read, done(), { text: "ok" }];
+  const beforeModelResume = streams.length;
+  settled = nextSettled(session);
+  await session.prompt("Permissions are fixed, resume the goal");
+  await settled;
+  assert.equal(streams.length, beforeModelResume + 5);
+  assert.match(contextOf(beforeModelResume + 2), /You stopped, but the goal has not been reported done/);
+  assert.equal(lastGoal(session).status, "done", "model resume unblocks and the loop continues");
+  assert.equal(lastGoal(session).blockedReason, undefined);
   await session.prompt("/goal clear");
 
   // 4. Native retries finish first; the supervisor never schedules while Pi still retries.
@@ -314,13 +323,13 @@ try {
   assert.equal(goal.pausedBy, "interrupt");
   assert.deepEqual(pendingDelays(), []);
   assert.match(widgetFactory({ requestRender() {} }, theme).render(80)[0], /paused · Long task · interrupt — \/goal resume/);
-  script = [{ toolCall: { name: "goal_control", arguments: { action: "progress", evidence: "Manual check: fixture.txt still present on disk" } } }, done(), { text: "Claimed done while paused." }];
+  script = [{ toolCall: { name: "goal_control", arguments: { action: "progress", evidence: "Manual check: fixture.txt still present on disk" } } }, { toolCall: { name: "goal_control", arguments: { action: "resume", evidence: "Trying to resume a user-paused goal" } } }, done(), { text: "Claimed done while paused." }];
   await session.prompt("status?");
   await session.waitForIdle();
   goal = lastGoal(session);
   assert.equal(goal.paused, true, "model calls never unpause");
   assert.equal(goal.status, "done");
-  assert.deepEqual(goalMessages(session).filter((message) => /stopped, but the goal/.test(JSON.stringify(message.content))).length, 3, "no continuation while paused");
+  assert.deepEqual(goalMessages(session).filter((message) => /stopped, but the goal/.test(JSON.stringify(message.content))).length, 4, "no continuation while paused");
   assert.deepEqual(pendingDelays(), []);
   await session.prompt("/goal clear");
 

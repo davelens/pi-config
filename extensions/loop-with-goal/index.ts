@@ -14,7 +14,7 @@ const CHILD_WAKE_DELAY_MS = 1_000;
 const DISPATCH_GRACE_MS = 15_000;
 const GUARDRAILS_BLOCKED_EVENT = "guardrails:action:blocked";
 const controlSchema = Type.Object({
-  action: StringEnum(["progress", "done", "blocked"] as const),
+  action: StringEnum(["progress", "done", "blocked", "resume"] as const),
   evidence: Type.String({ description: "Concrete checks, files, commands, or results that support this claim" }),
 });
 
@@ -324,8 +324,8 @@ export default function loopWithGoal(pi: ExtensionAPI) {
   pi.registerTool({
     name: "goal_control",
     label: "Goal control",
-    description: "Report progress on, completion of, or a blocker for the pinned /goal. Evidence must name concrete checks or results.",
-    promptSnippet: "Report evidence-based progress, done, or blocked for the pinned goal",
+    description: "Report progress on, completion of, or a blocker for the pinned /goal, or resume a blocked goal when the user asks. Evidence must name concrete checks or results; for resume, what fixed the cause.",
+    promptSnippet: "Report evidence-based progress, done, or blocked for the pinned goal, or resume it when the user asks",
     parameters: controlSchema,
     async execute(_id, params) {
       if (!goal) throw new Error("No goal is pinned; the user starts one with /goal <text>");
@@ -333,10 +333,14 @@ export default function loopWithGoal(pi: ExtensionAPI) {
       idleStops = 0;
       if (params.action === "progress") update({ evidence });
       else if (params.action === "done") update({ status: "done", evidence, blockedReason: undefined });
-      else update({ status: "blocked", blockedReason: evidence, evidence });
-      if (params.action !== "progress") { timer.cancel(); pendingRecovery = undefined; deferredDispatch = undefined; }
+      else if (params.action === "blocked") update({ status: "blocked", blockedReason: evidence, evidence });
+      else if (goal.status === "done") throw new Error("Goal is done; the user can /goal clear it or pin a new one");
+      // Resume lifts only the blocked status; a user pause stays the user's to lift.
+      else update({ status: "active", blockedReason: undefined, failures: 0, lastError: undefined });
+      if (params.action === "done" || params.action === "blocked") { timer.cancel(); pendingRecovery = undefined; deferredDispatch = undefined; }
       const note = goal.paused ? " The goal stays paused until the user runs /goal resume." : "";
-      return { content: [{ type: "text", text: `Goal ${params.action === "progress" ? "progress recorded" : params.action}.${note}` }], details: { action: params.action, status: goal.status, paused: goal.paused } };
+      const label = params.action === "progress" ? "progress recorded" : params.action === "resume" ? "resumed" : params.action;
+      return { content: [{ type: "text", text: `Goal ${label}.${note}` }], details: { action: params.action, status: goal.status, paused: goal.paused } };
     },
   });
 

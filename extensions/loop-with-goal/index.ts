@@ -141,13 +141,7 @@ export default function loopWithGoal(pi: ExtensionAPI) {
     guardrailNote = undefined;
     if (goal!.pendingChildOutcomes.length) update({ pendingChildOutcomes: [] });
     awaitingStart = true;
-    try {
-      pi.sendMessage({ customType: GOAL_ENTRY, content, display: true }, { triggerTurn: true });
-    } catch (error) {
-      awaitingStart = false;
-      recordFailure(`continuation could not be sent: ${error instanceof Error ? error.message : String(error)}`);
-      return false;
-    }
+    pi.sendMessage({ customType: GOAL_ENTRY, content, display: true }, { triggerTurn: true });
     // A run that never starts would otherwise leave the goal silently idle.
     timer.arm(DISPATCH_GRACE_MS, () => { if (awaitingStart) { awaitingStart = false; recordFailure("continuation did not start a run"); } });
     render();

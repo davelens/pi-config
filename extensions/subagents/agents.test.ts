@@ -452,7 +452,7 @@ test("reports child timeouts instead of provider aborts", async () => {
   };
 
   await assert.rejects(
-    promptChild(session, "Task", new AbortController().signal, 5, () => {}),
+    promptChild(session, "Task", new AbortController().signal, 5),
     /Subagent attempt timed out after 5ms/,
   );
 });

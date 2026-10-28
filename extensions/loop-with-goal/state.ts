@@ -29,12 +29,6 @@ export interface GoalSnapshot {
   updatedAt: string;
 }
 
-export interface GoalTombstone {
-  version: 1;
-  goalId: string;
-  cleared: true;
-}
-
 /** User-control ledger entry; the latest one per goal wins on every branch. */
 export interface GoalControl {
   version: 1;
@@ -170,7 +164,7 @@ export class RecoveryTimer {
 
   cancel(): void {
     this.generation++;
-    if (this.handle !== undefined) clearTimeout(this.handle);
+    clearTimeout(this.handle);
     this.handle = undefined;
   }
 }

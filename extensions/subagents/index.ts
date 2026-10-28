@@ -27,7 +27,7 @@ import { buildDoctorReport } from "./doctor-report.ts";
 import { SubagentsDoctor } from "./doctor.ts";
 import { SubagentManager } from "./manager.ts";
 import { HISTORY_ENTRY, loadRunHistory } from "./history.ts";
-import { emitLifecycle, SUBAGENT_LIVE_RUNS_EVENT, type SubagentLifecycleEvent, type SubagentLiveRunsRequest, type SubagentRunIdentity } from "./lifecycle.ts";
+import { emitLifecycle, SUBAGENT_LIVE_RUNS_EVENT, type SubagentLifecycleEvent, type SubagentLiveRunsRequest, type SubagentRunIdentity, type SubagentTerminalStatus } from "./lifecycle.ts";
 import { promptChild } from "./prompt-child.ts";
 import { SubagentStallError } from "./stall-watchdog.ts";
 import { observeActivity, quietFor, QUIET_MS, requestExcerpt } from "./activity.ts";
@@ -326,12 +326,12 @@ async function runAttempt(agent: AgentConfig, task: string, cwd: string, target:
     }));
     const modelId = `${model.provider}/${model.id}`;
     const thinking = session.thinkingLevel;
-    if (sessionPath) options.onSession(sessionPath, modelId, thinking);
+    options.onSession(sessionPath, modelId, thinking);
     unsubscribe = onEvent ? session.subscribe(onEvent) : undefined;
     try {
       const remainingMs = deadline === undefined ? undefined : deadline - Date.now();
       if (remainingMs !== undefined && remainingMs <= 0) throw new Error(`Subagent timed out after ${agent.timeoutMs}ms`);
-      await promptChild(session, task, signal, remainingMs, (warning) => options.onWarning?.(warning));
+      await promptChild(session, task, signal, remainingMs, options.onWarning);
       return { output: textFromLastAssistantMessage(session.messages), model: modelId, thinking };
     } finally {
       if (existsSync(sessionPath)) options.onCheckpoint({
@@ -449,7 +449,7 @@ export default function subagents(pi: ExtensionAPI) {
       refreshStatus?.();
       pruneFinishedRuns(runs);
       // Locks are released by now; the status is terminal.
-      terminal.set(run.report.id, emitLifecycle(pi, { ...run.identity, phase: "finished", status: run.report.status as "completed" | "failed" | "aborted", reason: run.report.error, claimed: false }));
+      terminal.set(run.report.id, emitLifecycle(pi, { ...run.identity, phase: "finished", status: run.report.status as SubagentTerminalStatus, reason: run.report.error, claimed: false }));
     }
   };
 
@@ -490,7 +490,7 @@ export default function subagents(pi: ExtensionAPI) {
 
   pi.on("session_shutdown", async () => {
     shuttingDown = true;
-    if (statusTimer) clearInterval(statusTimer);
+    clearInterval(statusTimer);
     for (const run of runs.values()) {
       if (run.report.status === "running" || run.report.status === "waiting") run.controller.abort();
     }
@@ -522,7 +522,7 @@ export default function subagents(pi: ExtensionAPI) {
         });
       }, { overlay: true, overlayOptions: { anchor: "center", width: "100%", maxHeight: "100%" } });
     } finally {
-      if (statusTimer) clearInterval(statusTimer);
+      clearInterval(statusTimer);
       statusTimer = undefined;
       refreshStatus = undefined;
     }

@@ -1,6 +1,13 @@
 {
   "autocompleteMaxVisible": 5,
   "collapseChangelog": true,
+  "compaction": {
+    "modelOverrides": {
+      "claude-bridge/claude-opus-5-5": {
+        "reserveTokens": 500000
+      }
+    }
+  },
   "defaultModel": "claude-opus-5-5",
   "defaultProvider": "claude-bridge",
   "defaultThinkingLevel": "high",

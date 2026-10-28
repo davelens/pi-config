@@ -19,7 +19,7 @@ const piRoot = join(globalRoot, "@earendil-works/pi-coding-agent");
 let session;
 try {
   const { createAgentSession, DefaultResourceLoader, ModelRegistry, ModelRuntime, SessionManager, SettingsManager } = await import(pathToFileURL(join(piRoot, "dist/index.js")).href);
-  const { createAssistantMessageEventStream } = await import(pathToFileURL(join(piRoot, "node_modules/@earendil-works/pi-ai/dist/index.js")).href);
+  const { contentText, createAssistantMessageEventStream, getCurrentSystemMessage, getCurrentTools } = await import(pathToFileURL(join(piRoot, "node_modules/@earendil-works/pi-ai/dist/index.js")).href);
   mkdirSync(agentDir);
   writeFileSync(join(agentDir, "auth.json"), "{}");
   symlinkSync(join(repo, "npm"), join(agentDir, "npm"), "dir");
@@ -32,7 +32,7 @@ try {
   writeFileSync(join(skillDirectory, "SKILL.md"), "---\nname: child-skill\ndescription: CHILD_SKILL_DESCRIPTION\n---\nChild skill instructions.\n");
   const settingsManager = SettingsManager.inMemory({
     defaultProvider: "claude-bridge",
-    defaultModel: "claude-fable-5",
+    defaultModel: "claude-haiku-5-5",
     retry: { enabled: false },
     compaction: { enabled: false },
   });
@@ -71,10 +71,12 @@ try {
       // Exercise the real bridge capture/projection, but never start Claude Code.
       assert.throws(() => config.streamSimple(model, context, {
         ...options,
-        get cwd() { throw boundary; },
+        get sessionId() { throw boundary; },
       }), (error) => error === boundary);
-      prompts.push(context.systemPrompt);
-      toolSets.push(context.tools.map((tool) => tool.name));
+      // Pi folds the system prompt and tools into system messages.
+      const system = getCurrentSystemMessage(context.messages);
+      prompts.push([contentText(system.content), ...Object.values(system.sections ?? {})].join("\n\n"));
+      toolSets.push(getCurrentTools(context.messages).map((tool) => tool.name));
       const stream = createAssistantMessageEventStream();
       const message = {
         role: "assistant", content: [{ type: "text", text: "CAPTURE_OK" }],
@@ -87,11 +89,11 @@ try {
       return stream;
     },
   });
-  await session.setModel(registry.find("claude-bridge", "claude-fable-5"));
+  await session.setModel(registry.find("claude-bridge", "claude-haiku-5-5"));
   await session.prompt("Seed the parent capture without calling an API.");
   assert.equal(prompts.length, 1, "parent prompt capture must work before checking the child");
   const managed = join(root, ".config/agents/pi");
-  writeFileSync(join(managed, "oracle.md"), "---\nname: oracle\ndescription: Test oracle\nmodel: claude-bridge/claude-fable-5\nskills: child-skill\ntools: read\n---\nCHILD_ROLE_INSTRUCTIONS\n");
+  writeFileSync(join(managed, "oracle.md"), "---\nname: oracle\ndescription: Test oracle\nmodel: claude-bridge/claude-haiku-5-5\nskills: child-skill\ntools: read\n---\nCHILD_ROLE_INSTRUCTIONS\n");
   const subagents = loader.getExtensions().extensions.find((extension) => extension.tools.has("subagent"));
   const tool = subagents.tools.get("subagent").definition;
   const result = await tool.execute("bridge-check", { action: "run", agent: "oracle", task: "Check child prompt capture." }, new AbortController().signal, undefined, {

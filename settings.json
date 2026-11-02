@@ -16,7 +16,7 @@
   ],
   "editorPaddingX": 1,
   "hideThinkingBlock": false,
-  "lastChangelogVersion": "1.4.0",
+  "lastChangelogVersion": "1.5.0",
   "packages": [
     "git:github.com/DietrichGebert/ponytail",
     "git:github.com/elidickinson/pi-claude-bridge",
@@ -50,5 +50,11 @@
   "fullscreenScrollbar": "auto",
   "subagents": {
     "decisionModel": true
+  },
+  "extensionChangelogVersions": {
+    "{\"source\":\"git:github.com/elidickinson/pi-claude-bridge\",\"scope\":\"user\"}": "0.9.3",
+    "{\"source\":\"npm:@agnishc/edb-agent-steer\",\"scope\":\"user\"}": "0.21.1",
+    "{\"source\":\"npm:pi-tool-display\",\"scope\":\"user\"}": "0.5.0",
+    "{\"source\":\"npm:pi-powerline\",\"scope\":\"user\"}": "0.11.2"
   }
 }

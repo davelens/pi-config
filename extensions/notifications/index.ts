@@ -7,7 +7,7 @@ type PhoneMode = "off" | "on" | "once";
 
 const phoneConfig = join(homedir(), ".config/ntfy/pi-url");
 
-export default function notify(pi: ExtensionAPI) {
+export default function notifications(pi: ExtensionAPI) {
   let phoneMode: PhoneMode = "off";
   let desktopEnabled = true;
 

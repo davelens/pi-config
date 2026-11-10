@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import notify from "../extensions/notify/index.ts";
+import notifications from "../extensions/notifications/index.ts";
 
 const handlers = {};
 const commands = {};
@@ -32,7 +32,7 @@ const ctx = {
   ui: { notify() {}, setStatus() {} },
 };
 
-notify(pi);
+notifications(pi);
 await handlers.session_start({}, ctx);
 await commands["notify-desktop"].handler("off", ctx);
 await commands["notify-phone"].handler("once", ctx);
@@ -46,4 +46,4 @@ assert.equal(entries.at(-1).data.mode, "off");
 await commands["notify-desktop"].handler("on", ctx);
 await handlers.agent_settled({}, ctx);
 assert.equal(desktopNotifications, 1);
-console.log("notify test passed");
+console.log("notifications test passed");

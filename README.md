@@ -40,7 +40,7 @@ Use `/switch-session` to switch between sessions for the current project.
 
 ## Notifications
 
-`extensions/notify/index.ts` sends notifications when Pi settles. New sessions default to desktop notifications on and phone notifications off; changes persist when a session is resumed. Phone notifications use the ntfy endpoint in `~/.config/ntfy/pi-url`.
+`extensions/notifications/index.ts` sends notifications when Pi settles. New sessions default to desktop notifications on and phone notifications off; changes persist when a session is resumed. Phone notifications use the ntfy endpoint in `~/.config/ntfy/pi-url`.
 
 - `/notify-desktop on|off` — enable or disable desktop notifications
 - `/notify-desktop` — show the desktop notification state

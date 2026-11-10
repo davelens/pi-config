@@ -15,7 +15,7 @@ const CHILD_WAKE_DELAY_MS = 1_000;
 const DISPATCH_GRACE_MS = 15_000;
 const GUARDRAILS_BLOCKED_EVENT = "guardrails:action:blocked";
 const GIT_TIMEOUT_MS = 10_000;
-// The notify extension keeps its switches per session; a loop the user walked away from must keep reaching them.
+// The notifications extension keeps its switches per session; a loop the user walked away from must keep reaching them.
 const CARRIED_ENTRIES = ["phone-notify", "desktop-notify"];
 const controlSchema = Type.Object({
   action: StringEnum(["progress", "done", "blocked", "resume"] as const),

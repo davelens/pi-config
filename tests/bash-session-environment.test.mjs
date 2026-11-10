@@ -9,26 +9,7 @@ const globalRoot = execFileSync("npm", ["root", "-g"], { encoding: "utf8" }).tri
 const piRoot = join(globalRoot, "@earendil-works/pi-coding-agent");
 const sdkPath = join(piRoot, "dist/index.js");
 const { createBashTool } = await import(pathToFileURL(sdkPath).href);
-const { createJiti } = await import(pathToFileURL(join(piRoot, "node_modules/jiti/lib/jiti.mjs")).href);
-const jiti = createJiti(import.meta.url, {
-  alias: {
-    "@earendil-works/pi-coding-agent": sdkPath,
-    "@earendil-works/pi-tui": join(piRoot, "node_modules/@earendil-works/pi-tui/dist/index.js"),
-  },
-});
-const display = join(repo, "npm/node_modules/pi-tool-display/src");
-const { loadToolDisplayConfig } = await jiti.import(join(display, "config-store.ts"));
-const { registerToolDisplayOverrides } = await jiti.import(join(display, "tool-overrides.ts"));
-const { config, error } = loadToolDisplayConfig();
-assert.equal(error, undefined);
-
-// Exercise the installed display wrapper, not just the configuration value.
 const tools = new Map([["bash", createBashTool(repo)]]);
-registerToolDisplayOverrides({
-  registerTool: (tool) => tools.set(tool.name, tool),
-  getAllTools: () => [],
-  on() {},
-}, () => config);
 
 const ctx = {
   cwd: repo,

@@ -373,10 +373,10 @@ test("prunes old completed reports without removing active reports", () => {
 
 test("locks all mutation-capable runs per working directory", () => {
   const directory = mkdtempSync(join(tmpdir(), "lofi-subagent-locks-"));
-  const release = acquireMutationLock(directory, process.cwd(), "first");
-  assert.throws(() => acquireMutationLock(directory, join(process.cwd(), "default-agents"), "second"), /already running/);
+  const release = acquireMutationLock(directory, import.meta.dirname, "first");
+  assert.throws(() => acquireMutationLock(directory, join(import.meta.dirname, "default-agents"), "second"), /already running/);
   release();
-  const releaseAgain = acquireMutationLock(directory, process.cwd(), "second");
+  const releaseAgain = acquireMutationLock(directory, import.meta.dirname, "second");
   releaseAgain();
 });
 

@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Runs this repo's own tests; bare `node --test` also picks up the vendored packages in git/ and npm/.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+(($#)) && exec node --test "$@"
+exec node --test 'tests/*.test.mjs' 'extensions/**/*.test.ts'

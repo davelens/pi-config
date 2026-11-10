@@ -122,20 +122,20 @@ export default function condensed(pi: ExtensionAPI) {
     show(ctx, undefined);
   });
 
-  pi.registerCommand("condensed", {
+  pi.registerCommand("condensed-output", {
     description: "Show only agent updates and one progress line: on, off, or toggle",
     getArgumentCompletions: prefix =>
       ["on", "off"].filter(mode => mode.startsWith(prefix.trim())).map(mode => ({ value: mode, label: mode })),
     handler: async (args, ctx) => {
       const mode = args.trim() || (enabled ? "off" : "on");
       if (mode !== "on" && mode !== "off") {
-        ctx.ui.notify("Usage: /condensed [on|off]", "error");
+        ctx.ui.notify("Usage: /condensed-output [on|off]", "error");
         return;
       }
       enabled = mode === "on";
-      pi.appendEntry("condensed", { enabled });
+      pi.appendEntry("condensed-output", { enabled });
       apply(ctx);
-      ctx.ui.notify(`Condensed view: ${mode}`, "info");
+      ctx.ui.notify(`Condensed output view: ${mode}`, "info");
     },
   });
 }

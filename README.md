@@ -68,6 +68,16 @@ Use `/switch-session` to switch between sessions for the current project.
 
 Each slice has three phases: `/skill:next-slice` writes the brief in a new session, `/goal <brief>` runs it in another new session, and `/skill:git-commit` commits it there. Starting the loop is the permission to commit every slice. The loop moves on only when a phase is finished: exactly one brief reads `Not started.`, the goal is done, HEAD has moved and the working tree is clean. Otherwise it waits and says why; a blocked or paused goal continues the loop once it is resumed and done. Phone and desktop notification switches follow the loop into each new session.
 
+## Agent state
+
+`extensions/agent-state/` lets other apps follow interactive (TUI) sessions. A reader listens on its own Unix socket in `$XDG_RUNTIME_DIR/agent-state/` (create the directory if it is missing), named `<reader>.sock`; dotshell uses `dotshell.sock`. Every session connects to every socket there, checking for new ones every 5 seconds, and sends one JSON line per change:
+
+```json
+{"provider": "pi", "pid": 1234, "status": "busy", "cwd": "/path", "title": "..."}
+```
+
+`status` is `busy`, `idle`, `error`, or `input`; `title` is the session name or the first prompt. The open connection is the liveness signal: when it closes, the session is gone. Other agents can use the same directory: dotshell's Claude Code hook sends one-shot lines with `"oneshot": true` and a final `"status": "gone"`.
+
 ## Skills
 
 Skills load from the external directory `~/.config/agents/skills/pi`, wired via the `skills` array in `settings.json`. There is no local `skills/` directory in this repo — Pi auto-discovers everything under that path.

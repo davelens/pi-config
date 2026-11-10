@@ -1,12 +1,14 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { readdirSync } from "node:fs";
 import { createConnection, type Socket } from "node:net";
 import { join } from "node:path";
 
-// Pushes this interactive session's status to dotshell's ai-agents-monitor
-// over its Unix socket. The open connection doubles as the liveness signal:
-// dotshell drops the agent as soon as it closes.
+// Pushes this interactive session's status to every reader socket in
+// $XDG_RUNTIME_DIR/agent-state/ (such as dotshell's ai-agents-monitor). Each
+// open connection doubles as the liveness signal: a reader drops the agent as
+// soon as it closes.
 
-const RETRY_MS = 5000;
+const SCAN_MS = 5000;
 
 type Status = "busy" | "idle" | "error" | "input";
 
@@ -33,9 +35,8 @@ function asksForInput(text: string): boolean {
 }
 
 export default function (pi: ExtensionAPI) {
-  let socket: Socket | undefined;
-  let retry: ReturnType<typeof setTimeout> | undefined;
-  let active = false;
+  const sockets = new Map<string, Socket>();
+  let scan: ReturnType<typeof setInterval> | undefined;
   let cwd = "";
   let running = false;
   let prompting = false;
@@ -48,44 +49,53 @@ export default function (pi: ExtensionAPI) {
     return running ? "busy" : settled;
   }
 
+  const line = () => `${JSON.stringify({
+    provider: "pi", pid: process.pid, cwd, status: status(), title: name || firstPrompt,
+  })}\n`;
+
   function send() {
-    if (!socket || socket.connecting || socket.destroyed) return;
-    socket.write(`${JSON.stringify({
-      provider: "pi", pid: process.pid, cwd, status: status(), title: name || firstPrompt,
-    })}\n`);
+    for (const socket of sockets.values()) {
+      if (!socket.connecting && !socket.destroyed) socket.write(line());
+    }
   }
 
-  function connect() {
-    retry = undefined;
+  // Connects to reader sockets that appeared since the last scan, so readers
+  // can start (or restart) at any time.
+  function connectAll() {
     const runtimeDir = process.env.XDG_RUNTIME_DIR || `/run/user/${process.getuid?.() ?? 1000}`;
-    const conn = createConnection(join(runtimeDir, "dotshell-agents.sock"));
-    socket = conn;
-    conn.unref();
-    conn.on("connect", send);
-    // Monitoring must not interrupt Pi; a missing dotshell just means retrying.
-    conn.on("error", () => {});
-    conn.on("close", () => {
-      if (socket !== conn) return;
-      socket = undefined;
-      if (!active) return;
-      retry = setTimeout(connect, RETRY_MS);
-      retry.unref();
-    });
+    const dir = join(runtimeDir, "agent-state");
+    let names: string[];
+    try {
+      names = readdirSync(dir);
+    } catch {
+      return; // No reader has created the directory yet.
+    }
+    for (const name of names) {
+      const path = join(dir, name);
+      if (!name.endsWith(".sock") || sockets.has(path)) continue;
+      const conn = createConnection(path);
+      sockets.set(path, conn);
+      conn.unref();
+      conn.on("connect", () => conn.write(line()));
+      // Monitoring must not interrupt Pi; a dead reader just means retrying.
+      conn.on("error", () => {});
+      conn.on("close", () => {
+        if (sockets.get(path) === conn) sockets.delete(path);
+      });
+    }
   }
 
   function stop() {
-    active = false;
-    clearTimeout(retry);
-    retry = undefined;
-    socket?.destroy();
-    socket = undefined;
+    clearInterval(scan);
+    scan = undefined;
+    for (const socket of sockets.values()) socket.destroy();
+    sockets.clear();
   }
 
   pi.on("session_start", (_event, ctx: ExtensionContext) => {
     stop();
     if (ctx.mode !== "tui") return;
 
-    active = true;
     cwd = ctx.cwd;
     running = !ctx.isIdle();
     prompting = false;
@@ -95,7 +105,9 @@ export default function (pi: ExtensionAPI) {
       entry => entry.type === "message" && entry.message.role === "user" && textOf(entry.message),
     );
     firstPrompt = first?.type === "message" ? promptPreview(textOf(first.message)) : "";
-    connect();
+    connectAll();
+    scan = setInterval(connectAll, SCAN_MS);
+    scan.unref();
   });
 
   pi.on("session_shutdown", stop);

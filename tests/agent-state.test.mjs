@@ -1,30 +1,41 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import extension from "../extensions/dotshell-agent-state/index.ts";
+import extension from "../extensions/agent-state/index.ts";
 
-const sandbox = mkdtempSync(join(tmpdir(), "dotshell-agent-state-"));
+const sandbox = mkdtempSync(join(tmpdir(), "agent-state-"));
 process.env.XDG_RUNTIME_DIR = sandbox;
+const readerDir = join(sandbox, "agent-state");
+mkdirSync(readerDir);
 
-// Stand in for dotshell's agents socket: collect each connection's JSON lines.
-const connections = [];
-const server = createServer(socket => {
-  const conn = { lines: [], closed: false };
-  connections.push(conn);
-  let buffer = "";
-  socket.on("data", data => {
-    buffer += data;
-    let index;
-    while ((index = buffer.indexOf("\n")) >= 0) {
-      conn.lines.push(JSON.parse(buffer.slice(0, index)));
-      buffer = buffer.slice(index + 1);
-    }
+// Stand in for a reader's socket: collect each connection's JSON lines.
+async function reader(name) {
+  const connections = [];
+  const server = createServer(socket => {
+    const conn = { lines: [], closed: false };
+    connections.push(conn);
+    let buffer = "";
+    socket.on("data", data => {
+      buffer += data;
+      let index;
+      while ((index = buffer.indexOf("\n")) >= 0) {
+        conn.lines.push(JSON.parse(buffer.slice(0, index)));
+        buffer = buffer.slice(index + 1);
+      }
+    });
+    socket.on("close", () => { conn.closed = true; });
   });
-  socket.on("close", () => { conn.closed = true; });
-});
-await new Promise(resolve => server.listen(join(sandbox, "dotshell-agents.sock"), resolve));
+  await new Promise(resolve => server.listen(join(readerDir, name), resolve));
+  return { server, connections };
+}
+
+const { server, connections } = await reader("first.sock");
+const second = await reader("second.sock");
+// A reader that died without removing its socket, and an unrelated file.
+writeFileSync(join(readerDir, "stale.sock"), "");
+writeFileSync(join(readerDir, "notes.txt"), "");
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 50));
 const last = () => connections.at(-1).lines.at(-1);
@@ -98,6 +109,10 @@ await tick();
 assert.equal(last().title, "first prompt");
 console.log("ok - session names override the prompt title until cleared");
 
+assert.equal(second.connections.length, 1);
+assert.deepEqual(second.connections[0].lines, connections[0].lines);
+console.log("ok - every reader socket gets the same lines; stale and unrelated files are skipped");
+
 const long = "x".repeat(100);
 handlers.session_shutdown({ reason: "new" });
 handlers.session_shutdown({ reason: "new" });
@@ -124,4 +139,5 @@ assert.equal(connections.length, before);
 console.log("ok - headless modes never connect");
 
 server.close();
+second.server.close();
 rmSync(sandbox, { recursive: true, force: true });

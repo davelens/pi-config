@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const repo = resolve(import.meta.dirname, "..");
-const root = mkdtempSync(join(repo, ".loop-with-goal-test-"));
+const root = mkdtempSync(join(repo, ".plan-loop-test-"));
 process.on("exit", () => rmSync(root, { recursive: true, force: true }));
 const agentDir = join(root, "pi");
 process.env.HOME = root;
@@ -23,8 +23,8 @@ const jiti = createJiti(import.meta.url, { alias: {
   "@earendil-works/pi-coding-agent": join(piRoot, "dist/index.js"),
   typebox: join(piRoot, "node_modules/typebox/build/index.mjs"),
 } });
-const state = await jiti.import(join(repo, "extensions/loop-with-goal/state.ts"));
-const { goalWidgetLines } = await jiti.import(join(repo, "extensions/loop-with-goal/index.ts"));
+const state = await jiti.import(join(repo, "extensions/plan-loop/state.ts"));
+const { goalWidgetLines } = await jiti.import(join(repo, "extensions/plan-loop/index.ts"));
 const { visibleWidth, setKeybindings } = await import(pathToFileURL(join(piRoot, "node_modules/@earendil-works/pi-tui/dist/index.js")).href);
 const { KeybindingsManager } = await import(pathToFileURL(join(piRoot, "dist/core/keybindings.js")).href);
 const realFetch = globalThis.fetch;
@@ -52,6 +52,29 @@ const GOAL = "loop-with-goal";
   assert.equal(state.classifyFailure(undefined), "permanent");
   assert.deepEqual([1, 2, 3, 4, 5, 9].map(state.backoffMs), [5000, 10000, 20000, 40000, 60000, 60000]);
   assert.throws(() => state.validateEvidence("done"), /at least 20 characters/);
+}
+
+// Pure plan-loop state: arguments, plan and brief status, reconstruction.
+{
+  const custom = (customType, data) => ({ type: "custom", customType, data });
+  assert.deepEqual(state.parseLoopArgs(""), { plan: undefined, max: undefined });
+  assert.deepEqual(state.parseLoopArgs("multi-currency --max 3"), { plan: "multi-currency", max: 3 });
+  assert.deepEqual(state.parseLoopArgs("--max 2 roadmap"), { plan: "roadmap", max: 2 });
+  assert.match(state.parseLoopArgs("--max 0").error, /1 or more/);
+  assert.match(state.parseLoopArgs("--max").error, /1 or more/);
+  assert.match(state.parseLoopArgs("a b").error, /Usage/);
+  assert.match(state.parseLoopArgs("--force").error, /Usage/);
+  assert.equal(state.planOpen("# Plan\n\nNext: DEMO-02 — second\n"), true);
+  assert.equal(state.planOpen("# Plan\n\nNext: none — complete\n"), false);
+  assert.equal(state.planOpen("# Roadmap without the line\n"), true, "older plans stay open");
+  assert.equal(state.briefUnstarted("# X\n\n## Outcome\n\nNot started.\n"), true);
+  assert.equal(state.briefUnstarted("# X\n\n## Outcome\n\nDone 2026-11-10: Not started. was replaced\n"), false);
+  assert.equal(state.briefUnstarted("# X\n\nNot started.\n"), false, "only the Outcome section counts");
+  const loop = { version: 1, plan: "docs/briefs/demo-plan.md", phase: "brief", head: "abc", done: 0 };
+  assert.deepEqual(state.reconstructLoop([custom("plan-loop", loop)]), loop);
+  assert.equal(state.reconstructLoop([custom("plan-loop", loop), custom("plan-loop", { version: 1, ended: true })]), undefined, "tombstone ends");
+  assert.equal(state.reconstructLoop([custom("plan-loop", { ...loop, phase: "goal" })]), undefined, "a goal phase without its brief fails safe");
+  assert.equal(state.describeLoop({ ...loop, phase: "goal", brief: "docs/briefs/demo-01-goal.md", done: 1, max: 3 }), "goal · slice 2/3 · docs/briefs/demo-01-goal.md");
 }
 
 // Widget rendering fits narrow and wide terminals with wide characters, without theme leaks.
@@ -93,7 +116,7 @@ try {
   symlinkSync(join(repo, "npm"), join(agentDir, "npm"), "dir");
   setKeybindings(KeybindingsManager.create(agentDir));
   const settingsManager = SettingsManager.inMemory({ retry: { enabled: true, maxRetries: 2, baseDelayMs: 5 }, compaction: { enabled: false, keepRecentTokens: 1 } });
-  const extensionPaths = [join(repo, "extensions/loop-with-goal/index.ts"), join(repo, "extensions/subagents/index.ts"), join(repo, "npm/node_modules/@juicesharp/rpiv-ask-user-question/index.ts")];
+  const extensionPaths = [join(repo, "extensions/plan-loop/index.ts"), join(repo, "extensions/subagents/index.ts"), join(repo, "npm/node_modules/@juicesharp/rpiv-ask-user-question/index.ts")];
   const makeLoader = async () => {
     const loader = new DefaultResourceLoader({ cwd: root, agentDir, settingsManager, additionalExtensionPaths: extensionPaths, noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true });
     await loader.reload();
@@ -112,6 +135,7 @@ try {
     models: [modelDefinition("cheap")],
     streamSimple(model, context, options) {
       const step = script.shift() ?? { text: "UNSCRIPTED" };
+      step.run?.();
       streams.push({ messages: context.messages, step });
       const stream = createAssistantMessageEventStream();
       const base = { role: "assistant", api: model.api, provider: model.provider, model: model.id, usage, timestamp: Date.now() };
@@ -154,6 +178,7 @@ try {
   let inputHandler;
   let widgetFactory;
   let answer = () => ({ answers: [], cancelled: true });
+  let newSession = async () => ({ cancelled: false });
   const theme = { fg: (_color, text) => String(text) };
   const uiContext = {
     notify: (message, level) => notices.push(`${level}: ${message}`),
@@ -172,7 +197,7 @@ try {
     commandContextActions: {
       waitForIdle: () => target.waitForIdle(),
       navigateTree: (id, options) => target.navigateTree(id, options),
-      newSession: async () => ({ cancelled: false }), fork: async () => ({ cancelled: false }), switchSession: async () => ({ cancelled: false }), reload: async () => {},
+      newSession: (options) => newSession(options), fork: async () => ({ cancelled: false }), switchSession: async () => ({ cancelled: false }), reload: async () => {},
     },
   });
   const open = async (sessionManager) => {
@@ -596,7 +621,94 @@ try {
   await session.waitForIdle();
   assert.equal(script.length, 0);
   assert.equal(goalMessages(session).length, beforePlain, "no goal, no continuation");
-  console.log("loop-with-goal lifecycle test passed (no API calls)");
+
+  // 16. Plan loop: argument and plan errors change nothing.
+  const git = (...args) => execFileSync("git", ["-c", "user.name=test", "-c", "user.email=test@example.invalid", ...args], { cwd: root, encoding: "utf8" }).trim();
+  const planFile = join(root, "docs/briefs/demo-plan.md"), briefFile = join(root, "docs/briefs/demo-01-goal.md");
+  const lastLoop = (target) => state.reconstructLoop(target.sessionManager.getBranch());
+  const noticesAfter = async (command) => { const before = notices.length; await session.prompt(command); return notices.slice(before).join("\n"); };
+  mkdirSync(join(root, "docs/briefs"), { recursive: true });
+  // The fixture directory doubles as Pi's home; only the plan's documents are the project.
+  writeFileSync(join(root, ".gitignore"), "/*\n!/docs\n!/.gitignore\n");
+  git("init", "-q");
+  git("add", "-A");
+  git("commit", "-qm", "base");
+  assert.match(await noticesAfter("/plan-loop"), /No plan found/);
+  writeFileSync(planFile, "# Demo plan\n\nNext: DEMO-01 — first slice\n");
+  git("add", "-A");
+  git("commit", "-qm", "plan");
+  assert.match(await noticesAfter("/plan-loop other"), /No plan found for 'other'/);
+  assert.match(await noticesAfter("/plan-loop --max 0"), /1 or more/);
+  assert.match(await noticesAfter("/plan-loop step"), /No plan loop is running/);
+  assert.equal(lastLoop(session), undefined);
+
+  // 17. Each phase opens a replaced session the way Pi does: setup, then session_start, then the kick-off message.
+  const replaced = [];
+  const failures = [];
+  newSession = async (options) => {
+    const left = session;
+    await shutdown("new");
+    const sessionManager = SessionManager.create(root, root);
+    await options.setup?.(sessionManager);
+    widgetFactory = undefined;
+    opened = await open(sessionManager);
+    ({ session } = opened);
+    replaced.push(left);
+    await options.withSession?.({ sendUserMessage: async (text) => { session.prompt(text).catch((error) => failures.push(error)); } });
+    return { cancelled: false };
+  };
+
+  // No brief appears: the loop waits in the brief session and stops on request.
+  session.sessionManager.appendCustomEntry("phone-notify", { mode: "on" });
+  let before = streams.length;
+  script = [{ text: "The plan is stale; nothing to slice." }];
+  await session.prompt("/plan-loop demo");
+  await until(() => notices.some((notice) => /Plan loop waiting: 0 briefs/.test(notice)), "the loop to wait for a brief");
+  assert.equal(replaced.length, 1);
+  assert.match(contextOf(before), /\/skill:next-slice docs\/briefs\/demo-plan\.md/);
+  assert.equal(lastLoop(session).phase, "brief");
+  assert.ok(session.sessionManager.getBranch().some((entry) => entry.type === "custom" && entry.customType === "phone-notify" && entry.data.mode === "on"), "notification switches follow the loop");
+  assert.match(await noticesAfter("/plan-loop status"), /Plan loop: brief · slice 1 · docs\/briefs\/demo-plan\.md/);
+  assert.match(await noticesAfter("/plan-loop demo"), /already running/);
+  assert.match(await noticesAfter("/plan-loop stop"), /Plan loop stopped/);
+  assert.equal(lastLoop(session), undefined);
+  script = [{ text: "plain" }];
+  await session.prompt("hello");
+  await session.waitForIdle();
+  await settle();
+  assert.equal(replaced.length, 1, "a stopped loop opens no session");
+
+  // 18. One slice end to end: brief found, goal done, commit, plan complete.
+  writeFileSync(briefFile, "# DEMO-01 goal: first slice\n\n## Outcome\n\nNot started.\n");
+  before = streams.length;
+  const finish = () => {
+    writeFileSync(briefFile, "# DEMO-01 goal: first slice\n\n## Outcome\n\nDone 2026-11-10: verified.\n");
+    writeFileSync(planFile, "# Demo plan\n\nNext: none — complete\n");
+  };
+  script = [
+    { text: "Brief ready; the command is on the clipboard." },
+    { ...done("Slice verified: focused tests and the full check pass"), run: finish },
+    { text: "Slice done." },
+    { text: "Committed.", run: () => { git("add", "-A"); git("commit", "-qm", "slice"); } },
+  ];
+  const headBefore = git("rev-parse", "HEAD");
+  await session.prompt("/plan-loop demo");
+  await until(() => notices.some((notice) => /Plan loop finished after 1 slice: docs\/briefs\/demo-plan\.md is complete/.test(notice)), "the loop to finish");
+  assert.deepEqual(failures, []);
+  assert.equal(script.length, 0);
+  assert.equal(replaced.length, 3, "one new session for the brief, one for the goal");
+  assert.equal(lastLoop(replaced[2]), undefined, "the brief session left behind no longer carries the loop");
+  assert.match(contextOf(before), /\/skill:next-slice docs\/briefs\/demo-plan\.md/);
+  assert.match(contextOf(before + 1), /Pinned goal \(stays active[^"]*docs\/briefs\/demo-01-goal\.md/);
+  assert.doesNotMatch(contextOf(before + 1), /next-slice/, "the goal session starts without the brief session's context");
+  assert.match(contextOf(before + 3), /\/skill:git-commit Commit this slice/);
+  assert.equal(lastGoal(session).status, "done");
+  assert.equal(lastLoop(session), undefined);
+  assert.notEqual(git("rev-parse", "HEAD"), headBefore);
+  assert.equal(git("status", "--porcelain"), "");
+  assert.match(await noticesAfter("/plan-loop demo"), /Nothing to do: docs\/briefs\/demo-plan\.md has Next: none/);
+  assert.deepEqual(pendingDelays(), []);
+  console.log("plan-loop lifecycle test passed (no API calls)");
 } finally {
   globalThis.fetch = realFetch;
   globalThis.setTimeout = realSet;

@@ -56,6 +56,18 @@ Use `/switch-session` to switch between sessions for the current project.
 - `/condensed` — toggle
 - `/condensed on|off` — enable or disable (default on, remembered per session)
 
+## Goals and plan loops
+
+`extensions/plan-loop/` pins a goal and keeps the agent working until it reports the goal done or blocked with evidence, and runs a whole plan of such goals unattended.
+
+- `/goal <text>` — pin a goal; `/goal pause|resume|status|clear` control it
+- `/plan-loop [plan] [--max N]` — run a plan (`docs/migration/roadmap.md` or `docs/briefs/<slug>-plan.md`) slice by slice until its `Next:` line reads `none`, or for `N` slices
+- `/plan-loop status` — show the phase, slice and brief
+- `/plan-loop step` — check the current phase again, after fixing what the loop waits for
+- `/plan-loop stop` — end the loop; a pinned goal keeps running
+
+Each slice has three phases: `/skill:next-slice` writes the brief in a new session, `/goal <brief>` runs it in another new session, and `/skill:git-commit` commits it there. Starting the loop is the permission to commit every slice. The loop moves on only when a phase is finished: exactly one brief reads `Not started.`, the goal is done, HEAD has moved and the working tree is clean. Otherwise it waits and says why; a blocked or paused goal continues the loop once it is resumed and done. Phone and desktop notification switches follow the loop into each new session.
+
 ## Skills
 
 Skills load from the external directory `~/.config/agents/skills/pi`, wired via the `skills` array in `settings.json`. There is no local `skills/` directory in this repo — Pi auto-discovers everything under that path.

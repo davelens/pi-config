@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { basename, join } from "node:path";
 import { isRetryableAssistantError } from "@earendil-works/pi-ai";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 
+// Goal entries keep the extension's former name: sessions on disk carry it.
 export const GOAL_ENTRY = "loop-with-goal";
 export const GOAL_CONTROL_ENTRY = "loop-with-goal-control";
 export const MAX_FAILURES = 10;
@@ -167,4 +170,82 @@ export class RecoveryTimer {
     clearTimeout(this.handle);
     this.handle = undefined;
   }
+}
+
+export const LOOP_ENTRY = "plan-loop";
+const ROADMAP = "docs/migration/roadmap.md";
+const BRIEFS = "docs/briefs";
+const PHASES = new Set<string>(["brief", "goal", "commit"]);
+
+/** Plan-loop state; each phase that starts a new session carries it over as that session's first entry. */
+export interface LoopSnapshot {
+  version: 1;
+  /** Plan file, relative to the working directory. */
+  plan: string;
+  phase: "brief" | "goal" | "commit";
+  brief?: string;
+  /** HEAD when the slice started; the slice counts as committed once HEAD moved and the tree is clean. */
+  head: string;
+  done: number;
+  max?: number;
+}
+
+function isLoop(data: unknown): data is LoopSnapshot {
+  return isObject(data) && data.version === 1 && typeof data.plan === "string" && PHASES.has(String(data.phase))
+    && typeof data.head === "string" && typeof data.done === "number" && (data.phase === "brief" || typeof data.brief === "string");
+}
+
+/** The loop on this branch; a tombstone or malformed entry ends it, so bad state never opens sessions. */
+export function reconstructLoop(branch: readonly EntryLike[]): LoopSnapshot | undefined {
+  let loop: LoopSnapshot | undefined;
+  for (const entry of branch) {
+    if (entry.type === "custom" && entry.customType === LOOP_ENTRY) loop = isLoop(entry.data) ? entry.data : undefined;
+  }
+  return loop;
+}
+
+export function parseLoopArgs(text: string): { plan?: string; max?: number } | { error: string } {
+  const words = text.split(/\s+/).filter(Boolean);
+  const at = words.indexOf("--max");
+  let max: number | undefined;
+  if (at >= 0) {
+    max = Number(words[at + 1]);
+    if (!Number.isInteger(max) || max < 1) return { error: "--max needs a whole number of slices, 1 or more" };
+    words.splice(at, 2);
+  }
+  if (words.length > 1 || words[0]?.startsWith("-")) return { error: "Usage: /plan-loop [plan] [--max N] | step | stop | status" };
+  return { plan: words[0], max };
+}
+
+/** A plan is open until its `Next:` line reads none; a plan without the line (older projects) stays open. */
+export function planOpen(text: string): boolean {
+  return !/^Next:\s*none\b/im.test(text);
+}
+
+export function briefUnstarted(text: string): boolean {
+  return /^## Outcome\s*\n\s*Not started\b/m.test(text);
+}
+
+const read = (cwd: string, file: string) => readFileSync(join(cwd, file), "utf8");
+const list = (cwd: string, suffix: string) => existsSync(join(cwd, BRIEFS))
+  ? readdirSync(join(cwd, BRIEFS)).filter((name) => name.endsWith(suffix)).sort().map((name) => `${BRIEFS}/${name}`)
+  : [];
+
+/** Plan files, or the ones `plan` names by path, file name or slug (`roadmap`, `multi-currency`). */
+export function planFiles(cwd: string, plan?: string): string[] {
+  const all = [...(existsSync(join(cwd, ROADMAP)) ? [ROADMAP] : []), ...list(cwd, "-plan.md")];
+  return plan ? all.filter((file) => file === plan || basename(file, ".md") === plan || basename(file, "-plan.md") === plan) : all;
+}
+
+export function openPlans(cwd: string, plan?: string): string[] {
+  return planFiles(cwd, plan).filter((file) => planOpen(read(cwd, file)));
+}
+
+/** Briefs no goal has run yet: after next-slice settles, exactly one is the slice to run. */
+export function unstartedBriefs(cwd: string): string[] {
+  return list(cwd, "-goal.md").filter((file) => briefUnstarted(read(cwd, file)));
+}
+
+export function describeLoop(loop: LoopSnapshot): string {
+  return `${loop.phase} · slice ${loop.done + 1}${loop.max ? `/${loop.max}` : ""} · ${loop.brief ?? loop.plan}`;
 }

@@ -4,8 +4,9 @@ import { getKeybindings, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { isLifecycleEvent, requestLiveRuns, SUBAGENT_LIFECYCLE_EVENT } from "../subagents/lifecycle.ts";
 import {
-  activationPrompt, backoffMs, classifyFailure, compactionReminder, continuationPrompt, createGoal, describeGoal, GOAL_CONTROL_ENTRY, GOAL_ENTRY,
-  goalView, MAX_FAILURES, MAX_IDLE_STOPS, RecoveryTimer, reconstructGoal, validateEvidence, type GoalSnapshot, type GoalView, type PauseSource,
+  activationPrompt, backoffMs, classifyFailure, compactionReminder, continuationPrompt, createGoal, describeGoal, describeLoop, GOAL_CONTROL_ENTRY, GOAL_ENTRY,
+  goalView, LOOP_ENTRY, MAX_FAILURES, MAX_IDLE_STOPS, openPlans, parseLoopArgs, planFiles, RecoveryTimer, reconstructGoal, reconstructLoop, unstartedBriefs,
+  validateEvidence, type GoalSnapshot, type GoalView, type LoopSnapshot, type PauseSource,
 } from "./state.ts";
 
 const WIDGET_KEY = "loop-with-goal";
@@ -13,6 +14,9 @@ const REOPEN_DELAY_MS = 3_000;
 const CHILD_WAKE_DELAY_MS = 1_000;
 const DISPATCH_GRACE_MS = 15_000;
 const GUARDRAILS_BLOCKED_EVENT = "guardrails:action:blocked";
+const GIT_TIMEOUT_MS = 10_000;
+// The notify extension keeps its switches per session; a loop the user walked away from must keep reaching them.
+const CARRIED_ENTRIES = ["phone-notify", "desktop-notify"];
 const controlSchema = Type.Object({
   action: StringEnum(["progress", "done", "blocked", "resume"] as const),
   evidence: Type.String({ description: "Concrete checks, files, commands, or results that support this claim" }),
@@ -25,9 +29,10 @@ export function goalWidgetLines(view: GoalView, theme: Pick<Theme, "fg">, width:
   return [truncateToWidth(line, width)];
 }
 
-export default function loopWithGoal(pi: ExtensionAPI) {
+export default function planLoop(pi: ExtensionAPI) {
   let ctx: ExtensionContext | undefined;
   let goal: GoalSnapshot | undefined;
+  let loop: LoopSnapshot | undefined;
   const timer = new RecoveryTimer();
   const children = new Map<string, string>();
   let dialogs = 0;
@@ -170,6 +175,8 @@ export default function loopWithGoal(pi: ExtensionAPI) {
     toolsSinceStop = 0;
     children.clear();
     goal = reconstructGoal(c.sessionManager.getBranch(), c.sessionManager.getEntries());
+    loop = reconstructLoop(c.sessionManager.getBranch());
+    c.ui.setStatus(LOOP_ENTRY, loop && `loop: ${describeLoop(loop)}`);
     for (const run of requestLiveRuns(pi)) if (run.parentSessionId === c.sessionManager.getSessionId()) children.set(run.runId, run.agent);
   };
 
@@ -298,6 +305,8 @@ export default function loopWithGoal(pi: ExtensionAPI) {
 
   pi.on("agent_settled", (event) => {
     if (event.aborted) { latchPause("interrupt"); return; }
+    // Replacing the session needs a command context, so the loop advances through its own command.
+    if (loop && !active() && !children.size) pi.sendUserMessage("/plan-loop step", { expandPromptTemplates: true });
     if (!active()) return;
     if (!pendingRecovery) {
       if (deferredDispatch && !timer.pending) {
@@ -335,6 +344,109 @@ export default function loopWithGoal(pi: ExtensionAPI) {
       const note = goal.paused ? " The goal stays paused until the user runs /goal resume." : "";
       const label = params.action === "progress" ? "progress recorded" : params.action === "resume" ? "resumed" : params.action;
       return { content: [{ type: "text", text: `Goal ${label}.${note}` }], details: { action: params.action, status: goal.status, paused: goal.paused } };
+    },
+  });
+
+  const setLoop = (next: LoopSnapshot | undefined) => {
+    loop = next;
+    pi.appendEntry(LOOP_ENTRY, next ?? { version: 1, ended: true });
+    ctx?.ui.setStatus(LOOP_ENTRY, next && `loop: ${describeLoop(next)}`);
+  };
+
+  const git = async (cwd: string, ...args: string[]) => {
+    const result = await pi.exec("git", args, { cwd, timeout: GIT_TIMEOUT_MS });
+    return result.code === 0 ? result.stdout.trim() : undefined;
+  };
+
+  const committed = async (cwd: string, since: string) => {
+    const head = await git(cwd, "rev-parse", "HEAD");
+    return head !== undefined && head !== since && await git(cwd, "status", "--porcelain") === "";
+  };
+
+  /** Next phase in a new session, so no slice inherits another's context; the loop entry is the only hand-off. */
+  const enter = async (c: ExtensionCommandContext, next: LoopSnapshot) => {
+    const kick = next.phase === "goal" ? `/goal ${next.brief}` : `/skill:next-slice ${next.plan}`;
+    const branch = c.sessionManager.getBranch();
+    const carried = CARRIED_ENTRIES.flatMap((type) => {
+      const entry = branch.findLast((candidate) => candidate.type === "custom" && candidate.customType === type);
+      return entry?.type === "custom" ? [{ type, data: entry.data }] : [];
+    });
+    // The session left behind must not advance the loop again when it is reopened.
+    if (loop) setLoop(undefined);
+    // Only plain data crosses the replacement: this instance's pi and ctx are stale once newSession resolves.
+    const result = await c.newSession({
+      setup: async (sessionManager) => {
+        for (const entry of carried) sessionManager.appendCustomEntry(entry.type, entry.data);
+        sessionManager.appendCustomEntry(LOOP_ENTRY, next);
+      },
+      withSession: async (fresh) => { await fresh.sendUserMessage(kick, { expandPromptTemplates: true }); },
+    });
+    if (result.cancelled) c.ui.notify("Plan loop stopped: an extension cancelled the new session", "error");
+  };
+
+  const startLoop = async (args: string, c: ExtensionCommandContext) => {
+    if (loop) { c.ui.notify(`A plan loop is already running (${describeLoop(loop)}); /plan-loop stop ends it`, "error"); return; }
+    const parsed = parseLoopArgs(args);
+    if ("error" in parsed) { c.ui.notify(parsed.error, "error"); return; }
+    const head = await git(c.cwd, "rev-parse", "HEAD");
+    if (!head) { c.ui.notify("Plan loop needs a git repository with a commit: every slice ends in one", "error"); return; }
+    const open = openPlans(c.cwd, parsed.plan);
+    if (open.length !== 1) {
+      const found = planFiles(c.cwd, parsed.plan);
+      c.ui.notify(!found.length ? `No plan found${parsed.plan ? ` for '${parsed.plan}'` : ""} (docs/migration/roadmap.md or docs/briefs/*-plan.md); /skill:kickoff creates one`
+        : !open.length ? `Nothing to do: ${found.join(", ")} has Next: none`
+        : `Several plans are open; name one: ${open.join(", ")}`, "error");
+      return;
+    }
+    await enter(c, { version: 1, plan: open[0]!, phase: "brief", head, done: 0, max: parsed.max });
+  };
+
+  /** Move the loop on when its phase is finished; anything else waits for the user or the next settle. */
+  const stepLoop = async (c: ExtensionCommandContext) => {
+    if (!loop) { c.ui.notify("No plan loop is running", "info"); return; }
+    const wait = (reason: string) => c.ui.notify(`Plan loop waiting: ${reason}\n/plan-loop step retries, /plan-loop stop ends the loop`, "warning");
+    if (loop.phase === "brief") {
+      const briefs = unstartedBriefs(c.cwd);
+      if (briefs.length !== 1) { wait(`${briefs.length} briefs read 'Not started.'; the loop runs exactly one${briefs.length ? ` (${briefs.join(", ")})` : ""}`); return; }
+      await enter(c, { ...loop, phase: "goal", brief: briefs[0] });
+      return;
+    }
+    if (loop.phase === "goal") {
+      if (!goal) { wait(`no goal is pinned; /goal ${loop.brief} runs the slice`); return; }
+      // A blocked or paused goal has already told the user; the loop continues once it reports done.
+      if (goal.status !== "done" || goal.paused) return;
+      if (!await committed(c.cwd, loop.head)) {
+        setLoop({ ...loop, phase: "commit" });
+        pi.sendUserMessage("/skill:git-commit Commit this slice as one commit: its brief, its records and its code.", { expandPromptTemplates: true });
+        return;
+      }
+    } else if (!await committed(c.cwd, loop.head)) {
+      wait("the slice is not committed (HEAD has not moved, or the working tree is not clean)");
+      return;
+    }
+    const done = loop.done + 1;
+    const end = !openPlans(c.cwd, loop.plan).length ? `${loop.plan} is complete` : loop.max && done >= loop.max ? `--max ${loop.max} reached` : undefined;
+    if (end) {
+      setLoop(undefined);
+      c.ui.notify(`Plan loop finished after ${done} ${done === 1 ? "slice" : "slices"}: ${end}`, "info");
+      return;
+    }
+    await enter(c, { ...loop, phase: "brief", brief: undefined, head: (await git(c.cwd, "rev-parse", "HEAD"))!, done });
+  };
+
+  pi.registerCommand("plan-loop", {
+    description: "Run a plan slice by slice, each phase in a new session (next-slice brief, /goal, commit): /plan-loop [plan] [--max N] | step | stop | status",
+    handler: async (args: string, c: ExtensionCommandContext) => {
+      const text = args.trim();
+      if (text === "status") { c.ui.notify(loop ? `Plan loop: ${describeLoop(loop)} (${loop.plan})` : "No plan loop is running", "info"); return; }
+      if (text === "stop") {
+        if (!loop) { c.ui.notify("No plan loop is running", "info"); return; }
+        setLoop(undefined);
+        c.ui.notify("Plan loop stopped; a pinned goal keeps running until /goal pause", "info");
+        return;
+      }
+      if (!c.isIdle()) { c.ui.notify("Pi is busy; run /plan-loop when it is idle", "warning"); return; }
+      await (text === "step" ? stepLoop(c) : startLoop(text, c));
     },
   });
 

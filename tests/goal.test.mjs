@@ -23,8 +23,8 @@ const jiti = createJiti(import.meta.url, { alias: {
   "@earendil-works/pi-coding-agent": join(piRoot, "dist/index.js"),
   typebox: join(piRoot, "node_modules/typebox/build/index.mjs"),
 } });
-const state = await jiti.import(join(repo, "extensions/plan-loop/state.ts"));
-const { goalWidgetLines } = await jiti.import(join(repo, "extensions/plan-loop/index.ts"));
+const state = await jiti.import(join(repo, "extensions/goal/state.ts"));
+const { goalWidgetLines } = await jiti.import(join(repo, "extensions/goal/index.ts"));
 const { visibleWidth, setKeybindings } = await import(pathToFileURL(join(piRoot, "node_modules/@earendil-works/pi-tui/dist/index.js")).href);
 const { KeybindingsManager } = await import(pathToFileURL(join(piRoot, "dist/core/keybindings.js")).href);
 const realFetch = globalThis.fetch;
@@ -116,7 +116,7 @@ try {
   symlinkSync(join(repo, "npm"), join(agentDir, "npm"), "dir");
   setKeybindings(KeybindingsManager.create(agentDir));
   const settingsManager = SettingsManager.inMemory({ retry: { enabled: true, maxRetries: 2, baseDelayMs: 5 }, compaction: { enabled: false, keepRecentTokens: 1 } });
-  const extensionPaths = [join(repo, "extensions/plan-loop/index.ts"), join(repo, "extensions/subagents/index.ts"), join(repo, "npm/node_modules/@juicesharp/rpiv-ask-user-question/index.ts")];
+  const extensionPaths = [join(repo, "extensions/goal/index.ts"), join(repo, "extensions/subagents/index.ts"), join(repo, "npm/node_modules/@juicesharp/rpiv-ask-user-question/index.ts")];
   const makeLoader = async () => {
     const loader = new DefaultResourceLoader({ cwd: root, agentDir, settingsManager, additionalExtensionPaths: extensionPaths, noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true });
     await loader.reload();
@@ -202,7 +202,7 @@ try {
   });
   const open = async (sessionManager) => {
     const loader = await makeLoader();
-    const { session } = await createAgentSession({ cwd: root, agentDir, resourceLoader: loader, settingsManager, modelRuntime: runtime, model: cheap, sessionManager, tools: ["read", "goal_control", "ask_user_question", "subagent"] });
+    const { session } = await createAgentSession({ cwd: root, agentDir, resourceLoader: loader, settingsManager, modelRuntime: runtime, model: cheap, sessionManager, tools: ["read", "goal_control", "goal_start", "ask_user_question", "subagent"] });
     await bind(session);
     const extension = loader.getExtensions().extensions.find((candidate) => candidate.commands.has("goal"));
     const subagents = loader.getExtensions().extensions.find((candidate) => candidate.tools.has("subagent"));
@@ -622,7 +622,7 @@ try {
   assert.equal(script.length, 0);
   assert.equal(goalMessages(session).length, beforePlain, "no goal, no continuation");
 
-  // 16. Plan loop: argument and plan errors change nothing.
+  // 16. Goal loop: argument and plan errors change nothing.
   const git = (...args) => execFileSync("git", ["-c", "user.name=test", "-c", "user.email=test@example.invalid", ...args], { cwd: root, encoding: "utf8" }).trim();
   const planFile = join(root, "docs/briefs/demo-plan.md"), briefFile = join(root, "docs/briefs/demo-01-goal.md");
   const lastLoop = (target) => state.reconstructLoop(target.sessionManager.getBranch());
@@ -633,13 +633,13 @@ try {
   git("init", "-q");
   git("add", "-A");
   git("commit", "-qm", "base");
-  assert.match(await noticesAfter("/plan-loop"), /No plan found/);
+  assert.match(await noticesAfter("/goal-loop"), /No plan found/);
   writeFileSync(planFile, "# Demo plan\n\nNext: DEMO-01 — first slice\n");
   git("add", "-A");
   git("commit", "-qm", "plan");
-  assert.match(await noticesAfter("/plan-loop other"), /No plan found for 'other'/);
-  assert.match(await noticesAfter("/plan-loop --max 0"), /1 or more/);
-  assert.match(await noticesAfter("/plan-loop step"), /No plan loop is running/);
+  assert.match(await noticesAfter("/goal-loop other"), /No plan found for 'other'/);
+  assert.match(await noticesAfter("/goal-loop --max 0"), /1 or more/);
+  assert.match(await noticesAfter("/goal-loop step"), /No goal loop is running/);
   assert.equal(lastLoop(session), undefined);
 
   // 17. Each phase opens a replaced session the way Pi does: setup, then session_start, then the kick-off message.
@@ -662,15 +662,15 @@ try {
   session.sessionManager.appendCustomEntry("phone-notify", { mode: "on" });
   let before = streams.length;
   script = [{ text: "The plan is stale; nothing to slice." }];
-  await session.prompt("/plan-loop demo");
-  await until(() => notices.some((notice) => /Plan loop waiting: 0 briefs/.test(notice)), "the loop to wait for a brief");
+  await session.prompt("/goal-loop demo");
+  await until(() => notices.some((notice) => /Goal loop waiting: 0 briefs/.test(notice)), "the loop to wait for a brief");
   assert.equal(replaced.length, 1);
   assert.match(contextOf(before), /\/skill:next-slice docs\/briefs\/demo-plan\.md/);
   assert.equal(lastLoop(session).phase, "brief");
   assert.ok(session.sessionManager.getBranch().some((entry) => entry.type === "custom" && entry.customType === "phone-notify" && entry.data.mode === "on"), "notification switches follow the loop");
-  assert.match(await noticesAfter("/plan-loop status"), /Plan loop: brief · slice 1 · docs\/briefs\/demo-plan\.md/);
-  assert.match(await noticesAfter("/plan-loop demo"), /already running/);
-  assert.match(await noticesAfter("/plan-loop stop"), /Plan loop stopped/);
+  assert.match(await noticesAfter("/goal-loop status"), /Goal loop: brief · slice 1 · docs\/briefs\/demo-plan\.md/);
+  assert.match(await noticesAfter("/goal-loop demo"), /already running/);
+  assert.match(await noticesAfter("/goal-loop stop"), /Goal loop stopped/);
   assert.equal(lastLoop(session), undefined);
   script = [{ text: "plain" }];
   await session.prompt("hello");
@@ -692,8 +692,8 @@ try {
     { text: "Committed.", run: () => { git("add", "-A"); git("commit", "-qm", "slice"); } },
   ];
   const headBefore = git("rev-parse", "HEAD");
-  await session.prompt("/plan-loop demo");
-  await until(() => notices.some((notice) => /Plan loop finished after 1 slice: docs\/briefs\/demo-plan\.md is complete/.test(notice)), "the loop to finish");
+  await session.prompt("/goal-loop demo");
+  await until(() => notices.some((notice) => /Goal loop finished after 1 slice: docs\/briefs\/demo-plan\.md is complete/.test(notice)), "the loop to finish");
   assert.deepEqual(failures, []);
   assert.equal(script.length, 0);
   assert.equal(replaced.length, 3, "one new session for the brief, one for the goal");
@@ -706,9 +706,40 @@ try {
   assert.equal(lastLoop(session), undefined);
   assert.notEqual(git("rev-parse", "HEAD"), headBefore);
   assert.equal(git("status", "--porcelain"), "");
-  assert.match(await noticesAfter("/plan-loop demo"), /Nothing to do: docs\/briefs\/demo-plan\.md has Next: none/);
+  assert.match(await noticesAfter("/goal-loop demo"), /Nothing to do: docs\/briefs\/demo-plan\.md has Next: none/);
   assert.deepEqual(pendingDelays(), []);
-  console.log("plan-loop lifecycle test passed (no API calls)");
+
+  // 19. /goal-kickoff hands its ask to the kickoff skill.
+  before = streams.length;
+  script = [{ text: "Kicked off." }];
+  await session.prompt("/goal-kickoff Add multi-currency pricing");
+  await until(() => streams.length > before, "the kickoff message");
+  await session.waitForIdle();
+  assert.match(contextOf(before), /\/skill:kickoff Add multi-currency pricing/);
+
+  // 20. goal_start pins only an approved, unstarted brief; the goal runs once the kickoff turn ends.
+  const soloFile = "docs/briefs/solo-01-goal.md";
+  writeFileSync(join(root, soloFile), "# SOLO-01 goal: one slice\n\n## Outcome\n\nNot started.\n");
+  assert.match(state.briefRefusal(root, "README.md"), /not a docs\/briefs/);
+  assert.match(state.briefRefusal(root, "docs/briefs/../x-goal.md"), /not a docs\/briefs/);
+  assert.match(state.briefRefusal(root, "docs/briefs/missing-goal.md"), /does not exist/);
+  assert.match(state.briefRefusal(root, "docs/briefs/demo-01-goal.md"), /Not started/);
+  assert.equal(state.briefRefusal(root, soloFile), undefined);
+  const goalBefore = lastGoal(session).goalId;
+  script = [{ toolCall: { name: "goal_start", arguments: { brief: "docs/briefs/demo-01-goal.md" } } }, { text: "Refused." }];
+  settled = nextSettled(session);
+  await session.prompt("Approved.");
+  await settled;
+  assert.equal(lastGoal(session).goalId, goalBefore, "a refused start pins nothing");
+  assert.match(JSON.stringify(streams.at(-1).messages.at(-1)), /Cannot start the goal: .*Not started/);
+  before = streams.length;
+  script = [{ toolCall: { name: "goal_start", arguments: { brief: soloFile } } }, { text: "Goal pinned." }, done("Solo slice verified: its checklist passes"), { text: "ok" }];
+  await session.prompt("Approved.");
+  await until(() => lastGoal(session)?.text === soloFile && lastGoal(session).status === "done", "the started goal to finish");
+  await session.waitForIdle();
+  assert.equal(script.length, 0);
+  assert.match(contextOf(before + 2), /Pinned goal \(stays active[^"]*docs\/briefs\/solo-01-goal\.md/);
+  console.log("goal-loop lifecycle test passed (no API calls)");
 } finally {
   globalThis.fetch = realFetch;
   globalThis.setTimeout = realSet;

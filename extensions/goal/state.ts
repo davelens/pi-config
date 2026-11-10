@@ -172,6 +172,7 @@ export class RecoveryTimer {
   }
 }
 
+// Persisted entry type; kept from before the /goal-loop rename so older sessions still restore.
 export const LOOP_ENTRY = "plan-loop";
 const ROADMAP = "docs/migration/roadmap.md";
 const BRIEFS = "docs/briefs";
@@ -213,7 +214,7 @@ export function parseLoopArgs(text: string): { plan?: string; max?: number } | {
     if (!Number.isInteger(max) || max < 1) return { error: "--max needs a whole number of slices, 1 or more" };
     words.splice(at, 2);
   }
-  if (words.length > 1 || words[0]?.startsWith("-")) return { error: "Usage: /plan-loop [plan] [--max N] | step | stop | status" };
+  if (words.length > 1 || words[0]?.startsWith("-")) return { error: "Usage: /goal-loop [plan] [--max N] | step | stop | status" };
   return { plan: words[0], max };
 }
 
@@ -244,6 +245,13 @@ export function openPlans(cwd: string, plan?: string): string[] {
 /** Briefs no goal has run yet: after next-slice settles, exactly one is the slice to run. */
 export function unstartedBriefs(cwd: string): string[] {
   return list(cwd, "-goal.md").filter((file) => briefUnstarted(read(cwd, file)));
+}
+
+/** Why `file` cannot be pinned as an approved brief, or undefined when it can: an existing `docs/briefs/*-goal.md` that reads `Not started.` */
+export function briefRefusal(cwd: string, file: string): string | undefined {
+  if (!new RegExp(`^${BRIEFS}/[a-z0-9][a-z0-9-]*-goal\\.md$`).test(file)) return `'${file}' is not a ${BRIEFS}/<slug>-goal.md path`;
+  if (!existsSync(join(cwd, file))) return `${file} does not exist`;
+  return briefUnstarted(read(cwd, file)) ? undefined : `${file} does not read 'Not started.' under ## Outcome`;
 }
 
 export function describeLoop(loop: LoopSnapshot): string {

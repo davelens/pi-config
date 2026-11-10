@@ -4,7 +4,7 @@ import { getKeybindings, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { isLifecycleEvent, requestLiveRuns, SUBAGENT_LIFECYCLE_EVENT } from "../subagents/lifecycle.ts";
 import {
-  activationPrompt, backoffMs, classifyFailure, compactionReminder, continuationPrompt, createGoal, describeGoal, describeLoop, GOAL_CONTROL_ENTRY, GOAL_ENTRY,
+  activationPrompt, backoffMs, briefRefusal, classifyFailure, compactionReminder, continuationPrompt, createGoal, describeGoal, describeLoop, GOAL_CONTROL_ENTRY, GOAL_ENTRY,
   goalView, LOOP_ENTRY, MAX_FAILURES, MAX_IDLE_STOPS, openPlans, parseLoopArgs, planFiles, RecoveryTimer, reconstructGoal, reconstructLoop, unstartedBriefs,
   validateEvidence, type GoalSnapshot, type GoalView, type LoopSnapshot, type PauseSource,
 } from "./state.ts";
@@ -17,6 +17,9 @@ const GUARDRAILS_BLOCKED_EVENT = "guardrails:action:blocked";
 const GIT_TIMEOUT_MS = 10_000;
 // The notifications extension keeps its switches per session; a loop the user walked away from must keep reaching them.
 const CARRIED_ENTRIES = ["phone-notify", "desktop-notify"];
+const startSchema = Type.Object({
+  brief: Type.String({ description: "The approved brief's path, relative to the project: docs/briefs/<slug>-goal.md" }),
+});
 const controlSchema = Type.Object({
   action: StringEnum(["progress", "done", "blocked", "resume"] as const),
   evidence: Type.String({ description: "Concrete checks, files, commands, or results that support this claim" }),
@@ -102,6 +105,13 @@ export default function planLoop(pi: ExtensionAPI) {
     update({ paused: true, pausedBy: source });
     control("pause", source);
     ctx?.ui.notify(`Goal paused (${source}); /goal resume continues it`, "warning");
+  };
+
+  const pin = (text: string, idle: boolean) => {
+    goal = createGoal(text);
+    persist();
+    render();
+    pi.sendUserMessage(activationPrompt(goal), idle ? undefined : { deliverAs: "followUp" });
   };
 
   const modelReady = (): string | undefined => {
@@ -306,7 +316,7 @@ export default function planLoop(pi: ExtensionAPI) {
   pi.on("agent_settled", (event) => {
     if (event.aborted) { latchPause("interrupt"); return; }
     // Replacing the session needs a command context, so the loop advances through its own command.
-    if (loop && !active() && !children.size) pi.sendUserMessage("/plan-loop step", { expandPromptTemplates: true });
+    if (loop && !active() && !children.size) pi.sendUserMessage("/goal-loop step", { expandPromptTemplates: true });
     if (!active()) return;
     if (!pendingRecovery) {
       if (deferredDispatch && !timer.pending) {
@@ -347,6 +357,22 @@ export default function planLoop(pi: ExtensionAPI) {
     },
   });
 
+  pi.registerTool({
+    name: "goal_start",
+    label: "Goal start",
+    description: "Pin an approved brief as the /goal; it starts once this turn ends. Call it only when a skill's steps say so and the user has explicitly approved the brief.",
+    promptSnippet: "Start the /goal for a brief the user explicitly approved, when a skill says so",
+    parameters: startSchema,
+    async execute(_id, params, _signal, _onUpdate, c) {
+      if (goal && goal.status !== "done") throw new Error(`A goal is already pinned (${goalView(goal).state}); the user can /goal clear it`);
+      if (loop) throw new Error("A goal loop is running; it pins its own goals");
+      const refusal = briefRefusal(c.cwd, params.brief.trim()) ?? modelReady();
+      if (refusal) throw new Error(`Cannot start the goal: ${refusal}`);
+      pin(params.brief.trim(), false);
+      return { content: [{ type: "text", text: `Goal pinned: ${goal!.text}. It starts after this turn; end the turn with a short report.` }], details: { brief: goal!.text } };
+    },
+  });
+
   const setLoop = (next: LoopSnapshot | undefined) => {
     loop = next;
     pi.appendEntry(LOOP_ENTRY, next ?? { version: 1, ended: true });
@@ -381,19 +407,19 @@ export default function planLoop(pi: ExtensionAPI) {
       },
       withSession: async (fresh) => { await fresh.sendUserMessage(kick, { expandPromptTemplates: true }); },
     });
-    if (result.cancelled) c.ui.notify("Plan loop stopped: an extension cancelled the new session", "error");
+    if (result.cancelled) c.ui.notify("Goal loop stopped: an extension cancelled the new session", "error");
   };
 
   const startLoop = async (args: string, c: ExtensionCommandContext) => {
-    if (loop) { c.ui.notify(`A plan loop is already running (${describeLoop(loop)}); /plan-loop stop ends it`, "error"); return; }
+    if (loop) { c.ui.notify(`A goal loop is already running (${describeLoop(loop)}); /goal-loop stop ends it`, "error"); return; }
     const parsed = parseLoopArgs(args);
     if ("error" in parsed) { c.ui.notify(parsed.error, "error"); return; }
     const head = await git(c.cwd, "rev-parse", "HEAD");
-    if (!head) { c.ui.notify("Plan loop needs a git repository with a commit: every slice ends in one", "error"); return; }
+    if (!head) { c.ui.notify("Goal loop needs a git repository with a commit: every slice ends in one", "error"); return; }
     const open = openPlans(c.cwd, parsed.plan);
     if (open.length !== 1) {
       const found = planFiles(c.cwd, parsed.plan);
-      c.ui.notify(!found.length ? `No plan found${parsed.plan ? ` for '${parsed.plan}'` : ""} (docs/migration/roadmap.md or docs/briefs/*-plan.md); /skill:kickoff creates one`
+      c.ui.notify(!found.length ? `No plan found${parsed.plan ? ` for '${parsed.plan}'` : ""} (docs/migration/roadmap.md or docs/briefs/*-plan.md); /goal-kickoff creates one`
         : !open.length ? `Nothing to do: ${found.join(", ")} has Next: none`
         : `Several plans are open; name one: ${open.join(", ")}`, "error");
       return;
@@ -403,8 +429,8 @@ export default function planLoop(pi: ExtensionAPI) {
 
   /** Move the loop on when its phase is finished; anything else waits for the user or the next settle. */
   const stepLoop = async (c: ExtensionCommandContext) => {
-    if (!loop) { c.ui.notify("No plan loop is running", "info"); return; }
-    const wait = (reason: string) => c.ui.notify(`Plan loop waiting: ${reason}\n/plan-loop step retries, /plan-loop stop ends the loop`, "warning");
+    if (!loop) { c.ui.notify("No goal loop is running", "info"); return; }
+    const wait = (reason: string) => c.ui.notify(`Goal loop waiting: ${reason}\n/goal-loop step retries, /goal-loop stop ends the loop`, "warning");
     if (loop.phase === "brief") {
       const briefs = unstartedBriefs(c.cwd);
       if (briefs.length !== 1) { wait(`${briefs.length} briefs read 'Not started.'; the loop runs exactly one${briefs.length ? ` (${briefs.join(", ")})` : ""}`); return; }
@@ -428,25 +454,34 @@ export default function planLoop(pi: ExtensionAPI) {
     const end = !openPlans(c.cwd, loop.plan).length ? `${loop.plan} is complete` : loop.max && done >= loop.max ? `--max ${loop.max} reached` : undefined;
     if (end) {
       setLoop(undefined);
-      c.ui.notify(`Plan loop finished after ${done} ${done === 1 ? "slice" : "slices"}: ${end}`, "info");
+      c.ui.notify(`Goal loop finished after ${done} ${done === 1 ? "slice" : "slices"}: ${end}`, "info");
       return;
     }
     await enter(c, { ...loop, phase: "brief", brief: undefined, head: (await git(c.cwd, "rev-parse", "HEAD"))!, done });
   };
 
-  pi.registerCommand("plan-loop", {
-    description: "Run a plan slice by slice, each phase in a new session (next-slice brief, /goal, commit): /plan-loop [plan] [--max N] | step | stop | status",
+  pi.registerCommand("goal-loop", {
+    description: "Run a plan slice by slice, each phase in a new session (next-slice brief, /goal, commit): /goal-loop [plan] [--max N] | step | stop | status",
     handler: async (args: string, c: ExtensionCommandContext) => {
       const text = args.trim();
-      if (text === "status") { c.ui.notify(loop ? `Plan loop: ${describeLoop(loop)} (${loop.plan})` : "No plan loop is running", "info"); return; }
+      if (text === "status") { c.ui.notify(loop ? `Goal loop: ${describeLoop(loop)} (${loop.plan})` : "No goal loop is running", "info"); return; }
       if (text === "stop") {
-        if (!loop) { c.ui.notify("No plan loop is running", "info"); return; }
+        if (!loop) { c.ui.notify("No goal loop is running", "info"); return; }
         setLoop(undefined);
-        c.ui.notify("Plan loop stopped; a pinned goal keeps running until /goal pause", "info");
+        c.ui.notify("Goal loop stopped; a pinned goal keeps running until /goal pause", "info");
         return;
       }
-      if (!c.isIdle()) { c.ui.notify("Pi is busy; run /plan-loop when it is idle", "warning"); return; }
+      if (!c.isIdle()) { c.ui.notify("Pi is busy; run /goal-loop when it is idle", "warning"); return; }
       await (text === "step" ? stepLoop(c) : startLoop(text, c));
+    },
+  });
+
+  pi.registerCommand("goal-kickoff", {
+    description: "Start any task with the kickoff skill: do it directly, write one /goal brief, or plan it in slices: /goal-kickoff <ask>",
+    handler: async (args: string, c: ExtensionCommandContext) => {
+      // Queued messages skip command expansion, so the skill only loads when Pi is idle.
+      if (!c.isIdle()) { c.ui.notify("Pi is busy; run /goal-kickoff when it is idle", "warning"); return; }
+      pi.sendUserMessage(`/skill:kickoff ${args.trim()}`.trim(), { expandPromptTemplates: true });
     },
   });
 
@@ -490,10 +525,7 @@ export default function planLoop(pi: ExtensionAPI) {
       if (goal && goal.status !== "done") { c.ui.notify(`A goal is already pinned (${goalView(goal).state}); /goal clear it first`, "error"); return; }
       const unavailable = modelReady();
       if (unavailable) { c.ui.notify(`Cannot pin a goal: ${unavailable}`, "error"); return; }
-      goal = createGoal(text);
-      persist();
-      render();
-      pi.sendUserMessage(activationPrompt(goal), c.isIdle() ? undefined : { deliverAs: "followUp" });
+      pin(text, c.isIdle());
     },
   });
 }

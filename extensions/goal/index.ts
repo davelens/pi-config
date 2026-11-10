@@ -391,7 +391,7 @@ export default function planLoop(pi: ExtensionAPI) {
 
   /** Next phase in a new session, so no slice inherits another's context; the loop entry is the only hand-off. */
   const enter = async (c: ExtensionCommandContext, next: LoopSnapshot) => {
-    const kick = next.phase === "goal" ? `/goal ${next.brief}` : `/skill:next-slice ${next.plan}`;
+    const kick = next.phase === "goal" ? `/goal ${next.brief}` : `/skill:goal-next-slice ${next.plan}`;
     const branch = c.sessionManager.getBranch();
     const carried = CARRIED_ENTRIES.flatMap((type) => {
       const entry = branch.findLast((candidate) => candidate.type === "custom" && candidate.customType === type);
@@ -461,7 +461,7 @@ export default function planLoop(pi: ExtensionAPI) {
   };
 
   pi.registerCommand("goal-loop", {
-    description: "Run a plan slice by slice, each phase in a new session (next-slice brief, /goal, commit): /goal-loop [plan] [--max N] | step | stop | status",
+    description: "Run a plan slice by slice, each phase in a new session (goal-next-slice brief, /goal, commit): /goal-loop [plan] [--max N] | step | stop | status",
     handler: async (args: string, c: ExtensionCommandContext) => {
       const text = args.trim();
       if (text === "status") { c.ui.notify(loop ? `Goal loop: ${describeLoop(loop)} (${loop.plan})` : "No goal loop is running", "info"); return; }
@@ -477,11 +477,11 @@ export default function planLoop(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("goal-kickoff", {
-    description: "Start any task with the kickoff skill: do it directly, write one /goal brief, or plan it in slices: /goal-kickoff <ask>",
+    description: "Start any task with the goal-kickoff skill: do it directly, write one /goal brief, or plan it in slices: /goal-kickoff <ask>",
     handler: async (args: string, c: ExtensionCommandContext) => {
       // Queued messages skip command expansion, so the skill only loads when Pi is idle.
       if (!c.isIdle()) { c.ui.notify("Pi is busy; run /goal-kickoff when it is idle", "warning"); return; }
-      pi.sendUserMessage(`/skill:kickoff ${args.trim()}`.trim(), { expandPromptTemplates: true });
+      pi.sendUserMessage(`/skill:goal-kickoff ${args.trim()}`.trim(), { expandPromptTemplates: true });
     },
   });
 

@@ -665,7 +665,7 @@ try {
   await session.prompt("/goal-loop demo");
   await until(() => notices.some((notice) => /Goal loop waiting: 0 briefs/.test(notice)), "the loop to wait for a brief");
   assert.equal(replaced.length, 1);
-  assert.match(contextOf(before), /\/skill:next-slice docs\/briefs\/demo-plan\.md/);
+  assert.match(contextOf(before), /\/skill:goal-next-slice docs\/briefs\/demo-plan\.md/);
   assert.equal(lastLoop(session).phase, "brief");
   assert.ok(session.sessionManager.getBranch().some((entry) => entry.type === "custom" && entry.customType === "phone-notify" && entry.data.mode === "on"), "notification switches follow the loop");
   assert.match(await noticesAfter("/goal-loop status"), /Goal loop: brief · slice 1 · docs\/briefs\/demo-plan\.md/);
@@ -698,7 +698,7 @@ try {
   assert.equal(script.length, 0);
   assert.equal(replaced.length, 3, "one new session for the brief, one for the goal");
   assert.equal(lastLoop(replaced[2]), undefined, "the brief session left behind no longer carries the loop");
-  assert.match(contextOf(before), /\/skill:next-slice docs\/briefs\/demo-plan\.md/);
+  assert.match(contextOf(before), /\/skill:goal-next-slice docs\/briefs\/demo-plan\.md/);
   assert.match(contextOf(before + 1), /Pinned goal \(stays active[^"]*docs\/briefs\/demo-01-goal\.md/);
   assert.doesNotMatch(contextOf(before + 1), /next-slice/, "the goal session starts without the brief session's context");
   assert.match(contextOf(before + 3), /\/skill:git-commit Commit this slice/);
@@ -709,13 +709,13 @@ try {
   assert.match(await noticesAfter("/goal-loop demo"), /Nothing to do: docs\/briefs\/demo-plan\.md has Next: none/);
   assert.deepEqual(pendingDelays(), []);
 
-  // 19. /goal-kickoff hands its ask to the kickoff skill.
+  // 19. /goal-kickoff hands its ask to the goal-kickoff skill.
   before = streams.length;
   script = [{ text: "Kicked off." }];
   await session.prompt("/goal-kickoff Add multi-currency pricing");
   await until(() => streams.length > before, "the kickoff message");
   await session.waitForIdle();
-  assert.match(contextOf(before), /\/skill:kickoff Add multi-currency pricing/);
+  assert.match(contextOf(before), /\/skill:goal-kickoff Add multi-currency pricing/);
 
   // 20. goal_start pins only an approved, unstarted brief; the goal runs once the kickoff turn ends.
   const soloFile = "docs/briefs/solo-01-goal.md";

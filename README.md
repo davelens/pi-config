@@ -8,6 +8,7 @@ My Pi coding agent configuration. Clone to `~/.config/pi/` and run `setup.sh`.
 ├── settings.json    # Global settings (provider, model, packages)
 ├── models.json      # Custom provider/model definitions
 ├── extensions/      # Pi extensions (TypeScript)
+├── skills/          # Skills that belong to an extension here (goal-kickoff, goal-next-slice)
 └── themes/          # Custom themes
 ```
 
@@ -58,17 +59,36 @@ Use `/switch-session` to switch between sessions for the current project.
 
 ## Goals and goal loops
 
-`extensions/goal/` provides `/goal-kickoff`, `/goal` and `/goal-loop`: it pins a goal and keeps the agent working until it reports the goal done or blocked with evidence, and runs a whole plan of such goals unattended.
+`extensions/goal/` and the skills `skills/goal-kickoff/` and `skills/goal-next-slice/` form one workflow: start a task, cut it into
+briefs a single `/goal` run can finish, and run those unattended. The extension parses the plan and brief formats the skills define
+(the `Next:` line, `## Outcome` / `Not started.`), so change them together.
 
-- `/goal-kickoff <ask>` — start any task through the `kickoff` skill (in `agent-skills`)
-- `goal_start` (tool) — pins an approved, unstarted `docs/briefs/*-goal.md` as the goal; kickoff calls it for a single-slice task once you approve the brief
-- `/goal <text>` — pin a goal; `/goal pause|resume|status|clear` control it
-- `/goal-loop [plan] [--max N]` — run a plan (`docs/migration/roadmap.md` or `docs/briefs/<slug>-plan.md`) slice by slice until its `Next:` line reads `none`, or for `N` slices
+```text
+/goal-kickoff <ask>   # at your desk: answer its questions, approve the plan or brief
+/goal-loop            # walk away: brief, goal and commit per slice, each in a new session
+```
+
+- `/goal-kickoff <ask>` — start any task through the `goal-kickoff` skill. It sorts the ask into one of four classes:
+  - **direct**: a few edits, done right away with no files;
+  - **single slice**: one brief; once you approve its reference and acceptance checklist, it starts the `/goal` itself through the
+    `goal_start` tool;
+  - **goal**: 2–8 slices in `docs/briefs/<slug>-plan.md` and the first brief;
+  - **migration**: a roadmap under `docs/migration/`, memory docs and the first brief.
+- `/goal-loop [plan] [--max N]` — run a plan (`docs/migration/roadmap.md` or `docs/briefs/<slug>-plan.md`) slice by slice until its
+  `Next:` line reads `none`, or for `N` slices
 - `/goal-loop status` — show the phase, slice and brief
 - `/goal-loop step` — check the current phase again, after fixing what the loop waits for
 - `/goal-loop stop` — end the loop; a pinned goal keeps running
+- `/goal <text>` — pin a goal; `/goal pause|resume|status|clear` control it, also inside a loop
+- `goal_start` (tool) — pins an approved, unstarted `docs/briefs/*-goal.md` as the goal
 
-Each slice has three phases: `/skill:next-slice` writes the brief in a new session, `/goal <brief>` runs it in another new session, and `/skill:git-commit` commits it there. Starting the loop is the permission to commit every slice. The loop moves on only when a phase is finished: exactly one brief reads `Not started.`, the goal is done, HEAD has moved and the working tree is clean. Otherwise it waits and says why; a blocked or paused goal continues the loop once it is resumed and done. Phone and desktop notification switches follow the loop into each new session.
+Each slice has three phases: `/skill:goal-next-slice` writes the brief in a new session, `/goal <brief>` runs it in another new
+session, and `/skill:git-commit` commits it there. Starting the loop is the permission to commit every slice. The loop moves on only
+when a phase is finished: exactly one brief reads `Not started.`, the goal is done, HEAD has moved and the working tree is clean.
+Otherwise it waits and says why; a blocked or paused goal continues the loop once `/goal resume` gets it done. Phone and desktop
+notification switches follow the loop into each new session.
+
+To step through a plan by hand instead: `/skill:goal-next-slice [plan]`, then `/goal <brief>`, then `/skill:git-commit`.
 
 ## Agent state
 
@@ -82,7 +102,8 @@ Each slice has three phases: `/skill:next-slice` writes the brief in a new sessi
 
 ## Skills
 
-Skills load from the external directory `~/.config/agents/skills/pi`, wired via the `skills` array in `settings.json`. There is no local `skills/` directory in this repo — Pi auto-discovers everything under that path.
+Most skills load from the external directory `~/.config/agents/skills/pi`, wired via the `skills` array in `settings.json`. Pi also
+discovers `skills/` in this repo, which holds only the skills an extension here depends on.
 
 ## Editing the current input prompt in Neovim
 

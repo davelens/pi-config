@@ -1,9 +1,3 @@
----
-name: goal-kickoff
-description: Start any task. Do a small one directly, or turn it into one `/goal` brief or a plan of slices (a goal or a software migration) with its docs structure and first brief.
-disable-model-invocation: true
----
-
 # Kickoff
 
 Start any task. Do a small one directly; otherwise write one brief for a `/goal` run, or turn a large ask into a **plan** of slices small enough for one `/goal` run each, set up the documents that let `/goal-loop` run it in any later session, and write the first brief. Beyond direct tasks, plan and leave building to `/goal`.

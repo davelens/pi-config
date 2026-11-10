@@ -1,8 +1,19 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { isRetryableAssistantError } from "@earendil-works/pi-ai";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+
+const SKILLS_DIR = join(dirname(fileURLToPath(import.meta.url)), "skills");
+
+/** The goal skills sit outside Pi's skill discovery to stay off the command list; this builds the message /skill:<name> <args> would. */
+export const skillPrompt = (name: string, args: string) => {
+  const dir = join(SKILLS_DIR, name);
+  const file = join(dir, "SKILL.md");
+  const block = `<skill name="${name}" location="${file}">\nReferences are relative to ${dir}.\n\n${readFileSync(file, "utf8").trim()}\n</skill>`;
+  return args ? `${block}\n\n${args}` : block;
+};
 
 // Goal entries keep the extension's former name: sessions on disk carry it.
 export const GOAL_ENTRY = "loop-with-goal";

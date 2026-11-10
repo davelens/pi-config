@@ -5,7 +5,7 @@ import { Type } from "typebox";
 import { isLifecycleEvent, requestLiveRuns, SUBAGENT_LIFECYCLE_EVENT } from "../subagents/lifecycle.ts";
 import {
   activationPrompt, backoffMs, briefRefusal, classifyFailure, compactionReminder, continuationPrompt, createGoal, describeGoal, describeLoop, GOAL_CONTROL_ENTRY, GOAL_ENTRY,
-  goalView, LOOP_ENTRY, MAX_FAILURES, MAX_IDLE_STOPS, openPlans, parseLoopArgs, planFiles, RecoveryTimer, reconstructGoal, reconstructLoop, unstartedBriefs,
+  goalView, LOOP_ENTRY, MAX_FAILURES, MAX_IDLE_STOPS, openPlans, parseLoopArgs, planFiles, RecoveryTimer, reconstructGoal, reconstructLoop, skillPrompt, unstartedBriefs,
   validateEvidence, type GoalSnapshot, type GoalView, type LoopSnapshot, type PauseSource,
 } from "./state.ts";
 
@@ -391,7 +391,7 @@ export default function planLoop(pi: ExtensionAPI) {
 
   /** Next phase in a new session, so no slice inherits another's context; the loop entry is the only hand-off. */
   const enter = async (c: ExtensionCommandContext, next: LoopSnapshot) => {
-    const kick = next.phase === "goal" ? `/goal ${next.brief}` : `/skill:goal-next-slice ${next.plan}`;
+    const kick = next.phase === "goal" ? `/goal ${next.brief}` : skillPrompt("goal-next-slice", next.plan);
     const branch = c.sessionManager.getBranch();
     const carried = CARRIED_ENTRIES.flatMap((type) => {
       const entry = branch.findLast((candidate) => candidate.type === "custom" && candidate.customType === type);
@@ -479,9 +479,9 @@ export default function planLoop(pi: ExtensionAPI) {
   pi.registerCommand("goal-kickoff", {
     description: "Start any task with the goal-kickoff skill: do it directly, write one /goal brief, or plan it in slices: /goal-kickoff <ask>",
     handler: async (args: string, c: ExtensionCommandContext) => {
-      // Queued messages skip command expansion, so the skill only loads when Pi is idle.
+      // A busy Pi would queue the kickoff behind the current run; start it on a clean turn.
       if (!c.isIdle()) { c.ui.notify("Pi is busy; run /goal-kickoff when it is idle", "warning"); return; }
-      pi.sendUserMessage(`/skill:goal-kickoff ${args.trim()}`.trim(), { expandPromptTemplates: true });
+      pi.sendUserMessage(skillPrompt("goal-kickoff", args.trim()));
     },
   });
 

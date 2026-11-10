@@ -2,7 +2,7 @@
 
 ## Prove `/goal-loop` on a real plan
 
-`/goal-loop` automates `/skill:goal-next-slice` → `/goal <brief>` in a new session → commit → repeat. Its test drives the phases with a
+`/goal-loop` automates the goal-next-slice brief → `/goal <brief>` in a new session → commit → repeat. Its test drives the phases with a
 fake model and an emulated session replacement; it has never run inside Pi.
 
 - Run `/goal-kickoff` on a small real goal, then `/goal-loop --max 1`, and watch each hand-off: the brief session, the goal session, the

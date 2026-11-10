@@ -1,9 +1,3 @@
----
-name: goal-next-slice
-description: Write the brief for the next slice of the project's plan to docs/briefs/ and copy its `/goal` command to the clipboard.
-disable-model-invocation: true
----
-
 # Next slice
 
 Turn the next open slice of the project's plan into a goal brief, then hand the user a paste-ready `/goal` command. Write the brief; leave its execution to `/goal`.

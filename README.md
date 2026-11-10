@@ -51,7 +51,7 @@ Use `/switch-session` to switch between sessions for the current project.
 
 ## Condensed view
 
-`extensions/condensed/` hides tool rows and thinking from the transcript. Each agent update gets a `[HH:MM]` prefix, and a trailing "Doing X:" sentence is shown in bold as "**Doing X**.". While the agent works, a single spinner line shows `Processing (thinking)` or `Processing (running tools)`; it disappears when the run settles. Only the display changes; the model sees the same messages and tool results.
+`extensions/condensed-output/` hides tool rows and thinking from the transcript. Each agent update gets a `[HH:MM]` prefix, and a trailing "Doing X:" sentence is shown in bold as "**Doing X**.". While the agent works, a single spinner line shows `Processing (thinking)` or `Processing (running tools)`; it disappears when the run settles. Only the display changes; the model sees the same messages and tool results.
 
 - `/condensed` — toggle
 - `/condensed on|off` — enable or disable (default on, remembered per session)

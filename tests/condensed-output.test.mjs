@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { collapseLeadingBlanks, condenseStep } from "../extensions/condensed/format.ts";
+import { collapseLeadingBlanks, condenseStep } from "../extensions/condensed-output/format.ts";
 
 const time = new Date(2026, 9, 28, 11, 54);
 
@@ -23,4 +23,4 @@ assert.deepEqual(collapseLeadingBlanks(["\x1b]133;A\x07", "", "", " Done."]), ["
 const untouched = ["", " Done.", "", " More."];
 assert.equal(collapseLeadingBlanks(untouched), untouched);
 
-console.log("condensed test passed");
+console.log("condensed-output test passed");

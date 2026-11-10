@@ -69,9 +69,11 @@ try {
     ...config,
     streamSimple(model, context, options) {
       // Exercise the real bridge capture/projection, but never start Claude Code.
+      // The bridge's first sessionId read precedes prompt capture inside a try; the second follows it, uncaught.
+      let sessionIdReads = 0;
       assert.throws(() => config.streamSimple(model, context, {
         ...options,
-        get sessionId() { throw boundary; },
+        get sessionId() { if (sessionIdReads++) throw boundary; },
       }), (error) => error === boundary);
       // Pi folds the system prompt and tools into system messages.
       const system = getCurrentSystemMessage(context.messages);

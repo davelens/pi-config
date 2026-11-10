@@ -60,7 +60,12 @@ export default function condensed(pi: ExtensionAPI) {
       ctx.ui.setWidget(WIDGET, (tui, theme) => {
         const spinner = new Loader(tui, text => theme.fg("accent", text), text => theme.fg("muted", text), next);
         loader = spinner;
-        return Object.assign(spinner, { dispose: () => spinner.stop() });
+        const render = spinner.render.bind(spinner);
+        // Loader pads a blank line above; move it below for breathing room.
+        return Object.assign(spinner, {
+          render: (width: number) => [...render(width).slice(1), ""],
+          dispose: () => spinner.stop(),
+        });
       });
     }
   };

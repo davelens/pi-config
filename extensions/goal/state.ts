@@ -210,7 +210,10 @@ export interface LoopSnapshot {
   brief?: string;
   /** HEAD when the slice started; the slice counts as committed once HEAD moved and the tree is clean. */
   head: string;
+  /** Slices finished this run; `--max` counts these. */
   done: number;
+  /** Briefs already done when the run started, so the slice number carries on across runs. */
+  before?: number;
   max?: number;
   /** Started with `/goal-loop afk`: every phase decides on its own instead of asking the user. */
   afk?: boolean;
@@ -259,6 +262,10 @@ export function briefUnstarted(text: string): boolean {
   return /^## Outcome\s*\n\s*Not started\b/m.test(text);
 }
 
+export function briefDone(text: string): boolean {
+  return /^## Outcome\s*\n\s*Done\b/m.test(text);
+}
+
 const read = (cwd: string, file: string) => readFileSync(join(cwd, file), "utf8");
 const list = (cwd: string, suffix: string) => existsSync(join(cwd, BRIEFS))
   ? readdirSync(join(cwd, BRIEFS)).filter((name) => name.endsWith(suffix)).sort().map((name) => `${BRIEFS}/${name}`)
@@ -279,6 +286,10 @@ export function unstartedBriefs(cwd: string): string[] {
   return list(cwd, "-goal.md").filter((file) => briefUnstarted(read(cwd, file)));
 }
 
+export function doneBriefs(cwd: string): number {
+  return list(cwd, "-goal.md").filter((file) => briefDone(read(cwd, file))).length;
+}
+
 /** Why `file` cannot be pinned as an approved brief, or undefined when it can: an existing `docs/briefs/*-goal.md` that reads `Not started.` */
 export function briefRefusal(cwd: string, file: string): string | undefined {
   if (!new RegExp(`^${BRIEFS}/[a-z0-9][a-z0-9-]*-goal\\.md$`).test(file)) return `'${file}' is not a ${BRIEFS}/<slug>-goal.md path`;
@@ -287,5 +298,5 @@ export function briefRefusal(cwd: string, file: string): string | undefined {
 }
 
 export function describeLoop(loop: LoopSnapshot): string {
-  return `${loop.afk ? "afk · " : ""}${loop.phase} · slice ${loop.done + 1}${loop.max ? `/${loop.max}` : ""} · ${loop.brief ?? loop.plan}`;
+  return `${loop.afk ? "afk · " : ""}${loop.phase} · slice ${(loop.before ?? 0) + loop.done + 1}${loop.max ? ` · run ${loop.done + 1}/${loop.max}` : ""} · ${loop.brief ?? loop.plan}`;
 }

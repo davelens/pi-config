@@ -6,7 +6,7 @@ import { getKeybindings, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { isLifecycleEvent, requestLiveRuns, SUBAGENT_LIFECYCLE_EVENT } from "../subagents/lifecycle.ts";
 import {
-  activationPrompt, backoffMs, briefRefusal, checkpointPath, checkpointPrompt, classifyFailure, compactionReminder, continuationPrompt, createGoal, describeGoal, describeLoop, GOAL_CONTROL_ENTRY, GOAL_ENTRY,
+  activationPrompt, backoffMs, briefRefusal, checkpointPath, checkpointPrompt, classifyFailure, compactionReminder, continuationPrompt, createGoal, describeGoal, describeLoop, doneBriefs, GOAL_CONTROL_ENTRY, GOAL_ENTRY,
   goalView, LOOP_ENTRY, loopMessage, MAX_FAILURES, MAX_IDLE_STOPS, openPlans, parseLoopArgs, planFiles, RecoveryTimer, reconstructGoal, reconstructLoop, skillPrompt, unstartedBriefs,
   validateEvidence, type GoalSnapshot, type GoalView, type LoopSnapshot, type PauseSource,
 } from "./state.ts";
@@ -459,7 +459,7 @@ export default function planLoop(pi: ExtensionAPI) {
         : `Several plans are open; name one: ${open.join(", ")}`, "error");
       return;
     }
-    await enter(c, { version: 1, plan: open[0]!, phase: "brief", head, done: 0, max: parsed.max, ...(parsed.afk && { afk: true }) });
+    await enter(c, { version: 1, plan: open[0]!, phase: "brief", head, done: 0, before: doneBriefs(c.cwd), max: parsed.max, ...(parsed.afk && { afk: true }) });
   };
 
   /** Move the loop on when its phase is finished; anything else waits for the user or the next settle. */

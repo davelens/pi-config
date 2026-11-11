@@ -79,7 +79,10 @@ const GOAL = "loop-with-goal";
   assert.deepEqual(state.reconstructLoop([custom("plan-loop", loop)]), loop);
   assert.equal(state.reconstructLoop([custom("plan-loop", loop), custom("plan-loop", { version: 1, ended: true })]), undefined, "tombstone ends");
   assert.equal(state.reconstructLoop([custom("plan-loop", { ...loop, phase: "goal" })]), undefined, "a goal phase without its brief fails safe");
-  assert.equal(state.describeLoop({ ...loop, phase: "goal", brief: "docs/briefs/demo-01-goal.md", done: 1, max: 3 }), "goal · slice 2/3 · docs/briefs/demo-01-goal.md");
+  assert.equal(state.describeLoop({ ...loop, phase: "goal", brief: "docs/briefs/demo-01-goal.md", done: 1, max: 3 }), "goal · slice 2 · run 2/3 · docs/briefs/demo-01-goal.md");
+  assert.equal(state.describeLoop({ ...loop, before: 17 }), "brief · slice 18 · docs/briefs/demo-plan.md", "carries on across runs");
+  assert.equal(state.briefDone("# X\n\n## Outcome\n\nDone 2026-11-10: shipped\n"), true);
+  assert.equal(state.briefDone("# X\n\n## Outcome\n\nBlocked: Done later\n"), false);
   assert.equal(state.describeLoop({ ...loop, afk: true }), "afk · brief · slice 1 · docs/briefs/demo-plan.md");
 }
 

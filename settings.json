@@ -51,7 +51,7 @@
     "decisionModel": true
   },
   "extensionChangelogVersions": {
-    "{\"source\":\"git:github.com/elidickinson/pi-claude-bridge\",\"scope\":\"user\"}": "0.11.0",
+    "{\"source\":\"git:github.com/elidickinson/pi-claude-bridge\",\"scope\":\"user\"}": "0.12.0",
     "{\"source\":\"npm:@agnishc/edb-agent-steer\",\"scope\":\"user\"}": "0.21.1",
     "{\"source\":\"npm:pi-powerline\",\"scope\":\"user\"}": "0.11.2",
     "{\"source\":\"npm:@aliou/pi-guardrails\",\"scope\":\"user\"}": "0.23.0"

@@ -208,7 +208,7 @@ try {
   });
   const open = async (sessionManager) => {
     const loader = await makeLoader();
-    const { session } = await createAgentSession({ cwd: root, agentDir, resourceLoader: loader, settingsManager, modelRuntime: runtime, model: cheap, sessionManager, tools: ["read", "goal_control", "goal_start", "ask_user_question", "subagent"] });
+    const { session } = await createAgentSession({ cwd: root, agentDir, resourceLoader: loader, settingsManager, modelRuntime: runtime, model: cheap, sessionManager, tools: ["read", "write", "goal_control", "goal_start", "ask_user_question", "subagent"] });
     await bind(session);
     const extension = loader.getExtensions().extensions.find((candidate) => candidate.commands.has("goal"));
     const subagents = loader.getExtensions().extensions.find((candidate) => candidate.tools.has("subagent"));
@@ -745,6 +745,42 @@ try {
   await session.waitForIdle();
   assert.equal(script.length, 0);
   assert.match(contextOf(before + 2), /Pinned goal \(stays active[^"]*docs\/briefs\/solo-01-goal\.md/);
+
+  // 21. /goal pause mid-run stops after the current call, blocks other tools, and leaves a checkpoint that /goal resume opens a fresh session from.
+  const pauseBrief = "docs/briefs/pause-01-goal.md", checkpoint = "docs/briefs/pause-01-state.md";
+  writeFileSync(join(root, pauseBrief), "# PAUSE-01 goal: pause me\n\n## Outcome\n\nNot started.\n");
+  assert.equal(state.checkpointPath({ text: `${pauseBrief}\n\n${state.AFK_NOTE}` }), checkpoint);
+  assert.equal(state.checkpointPath({ text: "Free-text goal" }), ".pi/goal-state.md");
+  before = streams.length;
+  script = [
+    { ...read, run: () => { session.prompt("/goal pause"); } },
+    { toolCall: { name: "write", arguments: { path: checkpoint, content: "Done: nothing. Next: read fixture.txt.\n" } } },
+    read,
+    { text: "Paused." },
+  ];
+  settled = nextSettled(session);
+  await session.prompt(`/goal ${pauseBrief}`);
+  await settled;
+  assert.equal(script.length, 0);
+  assert.equal(streams.length, before + 4, "no continuation after the checkpoint turn");
+  assert.match(contextOf(before + 1), /The user paused the goal\. Start no further work\. Write the current state of this goal to docs\/briefs\/pause-01-state\.md/);
+  assert.match(JSON.stringify(streams[before + 3].messages.at(-1)), /The goal is paused: only writing docs\/briefs\/pause-01-state\.md is allowed/);
+  assert.equal(readFileSync(join(root, checkpoint), "utf8"), "Done: nothing. Next: read fixture.txt.\n");
+  assert.equal(lastGoal(session).paused, true);
+  assert.equal(lastGoal(session).checkpoint, checkpoint);
+  const pausedSession = session;
+  before = streams.length;
+  script = [done("Resumed from the checkpoint and verified every criterion"), { text: "ok" }];
+  await session.prompt("/goal resume");
+  await until(() => session !== pausedSession && lastGoal(session)?.status === "done", "the resumed goal to finish");
+  await session.waitForIdle();
+  assert.deepEqual(failures, []);
+  assert.equal(lastGoal(pausedSession), undefined, "the paused session no longer carries the goal");
+  assert.match(contextOf(before), /The user resumed the goal in a fresh session\. Read docs\/briefs\/pause-01-state\.md first/);
+  assert.doesNotMatch(contextOf(before), /The user paused the goal/, "the fresh session starts without the old context");
+  assert.equal(lastGoal(session).text, pauseBrief);
+  assert.throws(() => readFileSync(join(root, checkpoint)), /ENOENT/, "done removes the checkpoint");
+  assert.deepEqual(pendingDelays(), []);
   console.log("goal-loop lifecycle test passed (no API calls)");
 } finally {
   globalThis.fetch = realFetch;

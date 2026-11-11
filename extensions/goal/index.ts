@@ -1,10 +1,12 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import { existsSync, rmSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { getKeybindings, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { isLifecycleEvent, requestLiveRuns, SUBAGENT_LIFECYCLE_EVENT } from "../subagents/lifecycle.ts";
 import {
-  activationPrompt, backoffMs, briefRefusal, classifyFailure, compactionReminder, continuationPrompt, createGoal, describeGoal, describeLoop, GOAL_CONTROL_ENTRY, GOAL_ENTRY,
+  activationPrompt, backoffMs, briefRefusal, checkpointPath, checkpointPrompt, classifyFailure, compactionReminder, continuationPrompt, createGoal, describeGoal, describeLoop, GOAL_CONTROL_ENTRY, GOAL_ENTRY,
   goalView, LOOP_ENTRY, loopMessage, MAX_FAILURES, MAX_IDLE_STOPS, openPlans, parseLoopArgs, planFiles, RecoveryTimer, reconstructGoal, reconstructLoop, skillPrompt, unstartedBriefs,
   validateEvidence, type GoalSnapshot, type GoalView, type LoopSnapshot, type PauseSource,
 } from "./state.ts";
@@ -45,6 +47,8 @@ export default function planLoop(pi: ExtensionAPI) {
   let pendingRecovery: string | undefined;
   let deferredDispatch: string | undefined;
   let awaitingStart = false;
+  /** The checkpoint file a mid-run /goal pause asked for; until the run settles, every other tool call is blocked. */
+  let checkpointing: string | undefined;
   let guardrailNote: string | undefined;
   let detail: string | undefined;
   let tui: { requestRender(): void } | undefined;
@@ -180,6 +184,7 @@ export default function planLoop(pi: ExtensionAPI) {
     pendingRecovery = undefined;
     deferredDispatch = undefined;
     awaitingStart = false;
+    checkpointing = undefined;
     detail = undefined;
     idleStops = 0;
     toolsSinceStop = 0;
@@ -223,6 +228,7 @@ export default function planLoop(pi: ExtensionAPI) {
     pendingRecovery = undefined;
     deferredDispatch = undefined;
     awaitingStart = false;
+    checkpointing = undefined;
     unsubscribeInput?.();
     unsubscribeInput = undefined;
     tui = undefined;
@@ -250,6 +256,16 @@ export default function planLoop(pi: ExtensionAPI) {
     render();
   });
 
+  const isCheckpointWrite = (toolName: string, input: unknown, cwd: string) => {
+    const path = (input as { path?: unknown } | undefined)?.path;
+    return (toolName === "write" || toolName === "edit") && typeof path === "string" && resolve(cwd, path) === resolve(cwd, checkpointing!);
+  };
+
+  pi.on("tool_call", (event, c) => {
+    if (!checkpointing || isCheckpointWrite(event.toolName, event.input, c.cwd)) return;
+    return { block: true, reason: `The goal is paused: only writing ${checkpointing} is allowed. Write it, then end your turn.` };
+  });
+
   pi.on("tool_execution_start", (event) => {
     if (event.toolName !== "goal_control") toolsSinceStop++;
   });
@@ -258,7 +274,8 @@ export default function planLoop(pi: ExtensionAPI) {
     if (event.message.role === "assistant") lastError = event.message.stopReason === "error" ? (event.message.errorMessage ?? "unknown provider error") : undefined;
   });
 
-  pi.on("tool_result", (event) => {
+  pi.on("tool_result", (event, c) => {
+    if (checkpointing && !event.isError && isCheckpointWrite(event.toolName, event.input, c.cwd)) update({ checkpoint: checkpointing });
     if (event.toolName !== "ask_user_question") return;
     const details = event.details as { cancelled?: boolean; error?: string } | undefined;
     if (details?.cancelled && !details.error) latchPause("questionnaire");
@@ -314,6 +331,7 @@ export default function planLoop(pi: ExtensionAPI) {
   });
 
   pi.on("agent_settled", (event) => {
+    checkpointing = undefined;
     if (event.aborted) { latchPause("interrupt"); return; }
     // Replacing the session needs a command context, so the loop advances through its own command.
     if (loop && !active() && !children.size) pi.sendUserMessage("/goal-loop step", { expandPromptTemplates: true });
@@ -340,7 +358,7 @@ export default function planLoop(pi: ExtensionAPI) {
     description: "Report progress on, completion of, or a blocker for the pinned /goal, or resume a blocked goal when the user asks. Evidence must name concrete checks or results; for resume, what fixed the cause.",
     promptSnippet: "Report evidence-based progress, done, or blocked for the pinned goal, or resume it when the user asks",
     parameters: controlSchema,
-    async execute(_id, params) {
+    async execute(_id, params, _signal, _onUpdate, c) {
       if (!goal) throw new Error("No goal is pinned; the user starts one with /goal <text>");
       const evidence = validateEvidence(params.evidence);
       idleStops = 0;
@@ -351,6 +369,8 @@ export default function planLoop(pi: ExtensionAPI) {
       // Resume lifts only the blocked status; a user pause stays the user's to lift.
       else update({ status: "active", blockedReason: undefined, failures: 0, lastError: undefined });
       if (params.action === "done" || params.action === "blocked") { timer.cancel(); pendingRecovery = undefined; deferredDispatch = undefined; }
+      // A finished goal's checkpoint would otherwise land in the slice commit.
+      if (params.action === "done") rmSync(join(c.cwd, checkpointPath(goal)), { force: true });
       const note = goal.paused ? " The goal stays paused until the user runs /goal resume." : "";
       const label = params.action === "progress" ? "progress recorded" : params.action === "resume" ? "resumed" : params.action;
       return { content: [{ type: "text", text: `Goal ${label}.${note}` }], details: { action: params.action, status: goal.status, paused: goal.paused } };
@@ -389,10 +409,8 @@ export default function planLoop(pi: ExtensionAPI) {
     return head !== undefined && head !== since && await git(cwd, "status", "--porcelain") === "";
   };
 
-  /** Next phase in a new session, so no slice inherits another's context; the loop entry is the only hand-off. */
-  const enter = async (c: ExtensionCommandContext, next: LoopSnapshot) => {
-    // The AFK note rides in the goal text, so every continuation and compaction reminder repeats it.
-    const kick = loopMessage(next, next.phase === "goal" ? `/goal ${next.brief}` : skillPrompt("goal-next-slice", next.plan));
+  /** Continue in a new session that starts with `entries` and `kick`; the session left behind no longer carries the loop. */
+  const replaceSession = async (c: ExtensionCommandContext, entries: [string, unknown][], kick: string) => {
     const branch = c.sessionManager.getBranch();
     const carried = CARRIED_ENTRIES.flatMap((type) => {
       const entry = branch.findLast((candidate) => candidate.type === "custom" && candidate.customType === type);
@@ -404,11 +422,27 @@ export default function planLoop(pi: ExtensionAPI) {
     const result = await c.newSession({
       setup: async (sessionManager) => {
         for (const entry of carried) sessionManager.appendCustomEntry(entry.type, entry.data);
-        sessionManager.appendCustomEntry(LOOP_ENTRY, next);
+        for (const [type, data] of entries) sessionManager.appendCustomEntry(type, data);
       },
       withSession: async (fresh) => { await fresh.sendUserMessage(kick, { expandPromptTemplates: true }); },
     });
-    if (result.cancelled) c.ui.notify("Goal loop stopped: an extension cancelled the new session", "error");
+    if (result.cancelled) c.ui.notify("Goal stopped: an extension cancelled the new session", "error");
+  };
+
+  /** Next phase in a new session, so no slice inherits another's context; the loop entry is the only hand-off. */
+  const enter = (c: ExtensionCommandContext, next: LoopSnapshot) =>
+    // The AFK note rides in the goal text, so every continuation and compaction reminder repeats it.
+    replaceSession(c, [[LOOP_ENTRY, next]], loopMessage(next, next.phase === "goal" ? `/goal ${next.brief}` : skillPrompt("goal-next-slice", next.plan)));
+
+  /** Resume a checkpointed goal in a new session, so its old context (and the compaction it would need) stays behind. */
+  const resumeFresh = async (c: ExtensionCommandContext, current: GoalSnapshot, file: string) => {
+    const lead = `The user resumed the goal in a fresh session. Read ${file} first: the previous session wrote it when the user paused, and it says what is done and what comes next.`;
+    const next: GoalSnapshot = { ...current, paused: false, pausedBy: undefined, status: "active", blockedReason: undefined, failures: 0, lastError: undefined, checkpoint: undefined, pendingChildOutcomes: [], updatedAt: now() };
+    const kick = continuationPrompt(next, lead, notes());
+    const carriedLoop = loop;
+    // The session left behind must not run the goal again when it is reopened.
+    pi.appendEntry(GOAL_ENTRY, { version: 1, goalId: current.goalId, cleared: true });
+    await replaceSession(c, [[GOAL_ENTRY, next], ...(carriedLoop ? [[LOOP_ENTRY, carriedLoop] as [string, unknown]] : [])], kick);
   };
 
   const startLoop = async (args: string, c: ExtensionCommandContext) => {
@@ -498,11 +532,22 @@ export default function planLoop(pi: ExtensionAPI) {
         if (!goal) { c.ui.notify("No goal is pinned", "warning"); return; }
         if (goal.paused) { c.ui.notify("Goal is already paused", "info"); return; }
         latchPause("command");
+        // Mid-run, the agent stops after its current tool calls and leaves a checkpoint for a fresh session.
+        if (!c.isIdle()) {
+          checkpointing = checkpointPath(goal);
+          pi.sendMessage({ customType: GOAL_ENTRY, content: checkpointPrompt(checkpointing), display: true }, { deliverAs: "steer" });
+          c.ui.notify(`Writing the goal's state to ${checkpointing}; /goal resume continues from it in a fresh session`, "info");
+        }
         return;
       }
       if (text === "resume") {
         if (!goal) { c.ui.notify("No goal is pinned", "warning"); return; }
         if (goal.status === "done") { c.ui.notify("Goal is done; /goal clear it or pin a new one", "info"); return; }
+        if (goal.checkpoint && existsSync(join(c.cwd, goal.checkpoint))) {
+          if (!c.isIdle()) { c.ui.notify("Pi is busy; run /goal resume when it is idle", "warning"); return; }
+          await resumeFresh(c, goal, goal.checkpoint);
+          return;
+        }
         update({ paused: false, pausedBy: undefined, status: "active", blockedReason: undefined, failures: 0, lastError: undefined });
         control("resume", "command");
         idleStops = 0;
@@ -516,6 +561,7 @@ export default function planLoop(pi: ExtensionAPI) {
         pendingRecovery = undefined;
         deferredDispatch = undefined;
         control("clear", "command");
+        rmSync(join(c.cwd, checkpointPath(goal)), { force: true });
         pi.appendEntry(GOAL_ENTRY, { version: 1, goalId: goal.goalId, cleared: true });
         goal = undefined;
         detail = undefined;

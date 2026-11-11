@@ -40,6 +40,8 @@ export interface GoalSnapshot {
   failures: number;
   lastError?: string;
   pendingChildOutcomes: string[];
+  /** Set once a pause wrote the checkpoint; /goal resume then continues in a fresh session from it. */
+  checkpoint?: string;
   updatedAt: string;
 }
 
@@ -128,6 +130,16 @@ export function continuationPrompt(goal: GoalSnapshot, lead: string, notes: stri
 
 export function compactionReminder(goal: GoalSnapshot): string {
   return `[loop-with-goal] Context was compacted. The pinned goal is still ${goal.paused ? "paused" : goal.status}:\n${goal.text}\n\nLatest evidence: ${goal.evidence ?? "none recorded"}`;
+}
+
+/** Where a paused goal writes its state: next to its brief, or under .pi/ for a free-text goal. */
+export function checkpointPath(goal: Pick<GoalSnapshot, "text">): string {
+  const slug = /^docs\/briefs\/([a-z0-9][a-z0-9-]*)-goal\.md$/.exec(goal.text.split("\n")[0]!.trim())?.[1];
+  return slug ? `docs/briefs/${slug}-state.md` : ".pi/goal-state.md";
+}
+
+export function checkpointPrompt(file: string): string {
+  return `[loop-with-goal] The user paused the goal. Start no further work. Write the current state of this goal to ${file} with the write tool, so a fresh session can resume from that file alone: what is done (with evidence), what is half-done (files, uncommitted changes), the exact next steps, and open questions or blockers. Then end your turn with one short line. Every other tool call is blocked.`;
 }
 
 export interface GoalView {

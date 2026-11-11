@@ -81,7 +81,9 @@ Pi's skill discovery, so they stay off the command list: `/goal-kickoff` and `/g
 - `/goal-loop status` — show the phase, slice and brief
 - `/goal-loop step` — check the current phase again, after fixing what the loop waits for
 - `/goal-loop stop` — end the loop; a pinned goal keeps running
-- `/goal <text>` — pin a goal; `/goal pause|resume|status|clear` control it, also inside a loop
+- `/goal <text>` — pin a goal; `/goal pause|resume|status|clear` control it, also inside a loop. A pause mid-run lets the running
+  tool calls finish, blocks the rest, and has the agent write a checkpoint (`docs/briefs/<slug>-state.md`, or `.pi/goal-state.md`
+  for a free-text goal); `/goal resume` then continues in a fresh session from that file. The checkpoint is deleted on done or clear.
 - `goal_start` (tool) — pins an approved, unstarted `docs/briefs/*-goal.md` as the goal
 
 Each slice has three phases: the `goal-next-slice` skill writes the brief in a new session, `/goal <brief>` runs it in another new

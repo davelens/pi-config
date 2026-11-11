@@ -64,6 +64,11 @@ const GOAL = "loop-with-goal";
   assert.match(state.parseLoopArgs("--max").error, /1 or more/);
   assert.match(state.parseLoopArgs("a b").error, /Usage/);
   assert.match(state.parseLoopArgs("--force").error, /Usage/);
+  assert.deepEqual(state.parseLoopArgs("afk"), { plan: undefined, max: undefined, afk: true });
+  assert.deepEqual(state.parseLoopArgs("afk multi-currency --max 2"), { plan: "multi-currency", max: 2, afk: true });
+  assert.deepEqual(state.parseLoopArgs("afk afk"), { plan: "afk", max: undefined, afk: true }, "a plan named afk follows the flag");
+  assert.equal(state.loopMessage({}, "/goal x"), "/goal x");
+  assert.equal(state.loopMessage({ afk: true }, "/goal x"), `/goal x\n\n${state.AFK_NOTE}`);
   assert.equal(state.planOpen("# Plan\n\nNext: DEMO-02 — second\n"), true);
   assert.equal(state.planOpen("# Plan\n\nNext: none — complete\n"), false);
   assert.equal(state.planOpen("# Roadmap without the line\n"), true, "older plans stay open");
@@ -75,6 +80,7 @@ const GOAL = "loop-with-goal";
   assert.equal(state.reconstructLoop([custom("plan-loop", loop), custom("plan-loop", { version: 1, ended: true })]), undefined, "tombstone ends");
   assert.equal(state.reconstructLoop([custom("plan-loop", { ...loop, phase: "goal" })]), undefined, "a goal phase without its brief fails safe");
   assert.equal(state.describeLoop({ ...loop, phase: "goal", brief: "docs/briefs/demo-01-goal.md", done: 1, max: 3 }), "goal · slice 2/3 · docs/briefs/demo-01-goal.md");
+  assert.equal(state.describeLoop({ ...loop, afk: true }), "afk · brief · slice 1 · docs/briefs/demo-plan.md");
 }
 
 // Widget rendering fits narrow and wide terminals with wide characters, without theme leaks.

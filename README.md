@@ -76,6 +76,8 @@ Pi's skill discovery, so they stay off the command list: `/goal-kickoff` and `/g
   - **migration**: a roadmap under `docs/migration/`, memory docs and the first brief.
 - `/goal-loop [plan] [--max N]` — run a plan (`docs/migration/roadmap.md` or `docs/briefs/<slug>-plan.md`) slice by slice until its
   `Next:` line reads `none`, or for `N` slices
+- `/goal-loop afk [plan] [--max N]` — the same, but you are away: every phase takes its own recommended option at a hiccup or open
+  question instead of asking, and records it; permission or guardrail denials and destructive or outward-facing actions still block
 - `/goal-loop status` — show the phase, slice and brief
 - `/goal-loop step` — check the current phase again, after fixing what the loop waits for
 - `/goal-loop stop` — end the loop; a pinned goal keeps running

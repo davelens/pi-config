@@ -200,7 +200,14 @@ export interface LoopSnapshot {
   head: string;
   done: number;
   max?: number;
+  /** Started with `/goal-loop afk`: every phase decides on its own instead of asking the user. */
+  afk?: boolean;
 }
+
+export const AFK_NOTE = `The user is away from the keyboard for this whole loop. Do not ask them anything or wait for an answer: at every hiccup, open question or choice that would go to the user, take your own recommended option, record it with its reason (in a brief as "approved by delegation (user AFK)"), and carry on. Still report blocked for a permission or guardrail denial, missing access, or a destructive or outward-facing action the project's rules reserve for the user.`;
+
+/** A phase's kick-off message, with the AFK instruction when the loop runs unattended. */
+export const loopMessage = (loop: Pick<LoopSnapshot, "afk">, text: string) => loop.afk ? `${text}\n\n${AFK_NOTE}` : text;
 
 function isLoop(data: unknown): data is LoopSnapshot {
   return isObject(data) && data.version === 1 && typeof data.plan === "string" && PHASES.has(String(data.phase))
@@ -216,8 +223,10 @@ export function reconstructLoop(branch: readonly EntryLike[]): LoopSnapshot | un
   return loop;
 }
 
-export function parseLoopArgs(text: string): { plan?: string; max?: number } | { error: string } {
+export function parseLoopArgs(text: string): { plan?: string; max?: number; afk?: boolean } | { error: string } {
   const words = text.split(/\s+/).filter(Boolean);
+  const afk = words[0] === "afk";
+  if (afk) words.shift();
   const at = words.indexOf("--max");
   let max: number | undefined;
   if (at >= 0) {
@@ -225,8 +234,8 @@ export function parseLoopArgs(text: string): { plan?: string; max?: number } | {
     if (!Number.isInteger(max) || max < 1) return { error: "--max needs a whole number of slices, 1 or more" };
     words.splice(at, 2);
   }
-  if (words.length > 1 || words[0]?.startsWith("-")) return { error: "Usage: /goal-loop [plan] [--max N] | step | stop | status" };
-  return { plan: words[0], max };
+  if (words.length > 1 || words[0]?.startsWith("-")) return { error: "Usage: /goal-loop [afk] [plan] [--max N] | step | stop | status" };
+  return { plan: words[0], max, ...(afk && { afk }) };
 }
 
 /** A plan is open until its `Next:` line reads none; a plan without the line (older projects) stays open. */
@@ -266,5 +275,5 @@ export function briefRefusal(cwd: string, file: string): string | undefined {
 }
 
 export function describeLoop(loop: LoopSnapshot): string {
-  return `${loop.phase} · slice ${loop.done + 1}${loop.max ? `/${loop.max}` : ""} · ${loop.brief ?? loop.plan}`;
+  return `${loop.afk ? "afk · " : ""}${loop.phase} · slice ${loop.done + 1}${loop.max ? `/${loop.max}` : ""} · ${loop.brief ?? loop.plan}`;
 }

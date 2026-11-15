@@ -1,0 +1,11 @@
+{
+  "name": "doc-triggers",
+  "version": "0.1.0",
+  "author": "Dave lens",
+  "description": "Points the agent to wiki entries for the files it touches and reminds it to update stale docs",
+  "type": "module",
+  "scripts": {
+    "test": "node --test --experimental-strip-types index.test.ts"
+  },
+  "dependencies": {}
+}

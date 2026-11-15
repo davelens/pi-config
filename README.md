@@ -102,6 +102,16 @@ notification switches follow the loop into each new session.
 
 `status` is `busy`, `idle`, `error`, or `input`; `title` is the session name or the first prompt. The open connection is the liveness signal: when it closes, the session is gone. Other agents can use the same directory: dotshell's Claude Code hook sends one-shot lines with `"oneshot": true` and a final `"status": "gone"`.
 
+## Doc triggers
+
+> **Under evaluation.** It is not known yet if the extension is worth its cost. It adds tokens (lookup lines, the wiki reads that they cause, one extra turn per settle reminder) in exchange for more wiki reads before code changes (baseline: 48% of raamwinkel sessions) and docs that stay correct. Keep it only if session data shows that gain.
+
+`extensions/doc-triggers/` keeps `docs/wiki/` and `docs/memory/` in step with the code, without loading them into the prompt. It is active only in projects that have one of these directories.
+
+- **Ownership:** a wiki entry owns the existing files and directories that it names in backticks, plus its `paths:` frontmatter list. Entries under `docs/wiki/roadmap/` own nothing. A memory doc owns only its `paths:` list; `architecture.md` also owns `Gemfile` and `package.json`, and `key-commands.md` owns `bin/`, `lib/tasks/`, `Rakefile` and `Procfile`. The file itself wins over its closest named directory; a new file also maps to the one wiki entry that names a sibling.
+- **Lookup:** the first time the agent reads, edits or writes a file that an unread wiki entry owns, the tool result gets one line that points to the entry. For calls inside a `codemode` script, the line goes on the `codemode` result.
+- **Update:** before a run settles, the extension compares git with the state at the start of the run (commits, changed and new files; the user's untouched changes stay out). For each changed file whose doc did not change, and for each new file that no entry owns (outside `spec/`, `test/`, `docs/`, `log/`, `tmp/`, `vendor/`), it adds a visible reminder and continues the run once. Each item is raised once per session.
+
 ## Skills
 
 Skills load from the external directory `~/.config/agents/skills/pi`, wired via the `skills` array in `settings.json`.

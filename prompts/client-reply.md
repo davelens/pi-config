@@ -4,7 +4,7 @@ argument-hint: "[max words] [focus]"
 ---
 Draft a reply to the client about this session's findings and changes. ${@:2}
 
-- Dutch, plain language for a non-technical reader; no code, class, table or file names.
+- Translate to dutch from ASD-STE100 Simplified Technical English; no code, class, table or file names.
 - At most ${1:-100} words. Lead with the answer or outcome, then what changes for them, then anything they must do or decide.
 - Only state what this session verified; mark assumptions as such.
 

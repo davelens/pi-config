@@ -162,7 +162,7 @@ class SwitchSessionComponent implements Component {
     return left + paddedPanel + right;
   }
 
-  private box(lines: string[], width: number, color: "accent" | "error"): string[] {
+  private box(lines: readonly string[], width: number, color: "accent" | "error"): string[] {
     const innerWidth = Math.max(1, width - 2);
     const top = this.theme.fg(color, "┌" + "─".repeat(innerWidth) + "┐");
     const bottom = this.theme.fg(color, "└" + "─".repeat(innerWidth) + "┘");

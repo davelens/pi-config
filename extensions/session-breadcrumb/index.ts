@@ -15,7 +15,7 @@ export default function sessionBreadcrumb(pi: ExtensionAPI) {
       const render = editor.render.bind(editor);
 
       editor.render = (width: number) => {
-        const lines = render(width);
+        const lines = [...render(width)];
         const name = pi.getSessionName();
 
         if (name && lines[0]) {

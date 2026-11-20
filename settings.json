@@ -16,7 +16,7 @@
   ],
   "editorPaddingX": 1,
   "hideThinkingBlock": true,
-  "lastChangelogVersion": "1.5.2",
+  "lastChangelogVersion": "1.6.0",
   "packages": [
     "git:github.com/DietrichGebert/ponytail",
     "git:github.com/elidickinson/pi-claude-bridge",
